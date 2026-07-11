@@ -1,0 +1,143 @@
+name: Vercel deploy
+
+on:
+  workflow_call:
+    inputs:
+      vault:
+        description: Project vault named webops-prod-<project> containing the app secrets and Vercel project ID. The supplied OP token must be scoped to this vault.
+        required: true
+        type: string
+      secrets:
+        description: Multiline KEY=secret-name entries resolved from the project vault for the Vercel build.
+        required: false
+        type: string
+        default: ""
+      environment:
+        description: The environment to deploy to (preview or production).
+        required: false
+        type: string
+        default: preview
+    secrets:
+      OP_SERVICE_ACCOUNT_TOKEN:
+        description: Project service account supplied by the caller and scoped to this repository's vault.
+        required: true
+    outputs:
+      deployment-url:
+        description: Preview or production URL returned by Vercel.
+        value: ${{ jobs.deploy.outputs.deployment-url }}
+
+jobs:
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.preview-url }}
+    steps:
+      - name: Checkout app repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.4.0
+
+      - name: Validate deployment inputs
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          VAULT: ${{ inputs.vault }}
+        run: |
+          set -euo pipefail
+          case "$ENVIRONMENT" in
+            preview|production) ;;
+            *) echo "::error::environment must be preview or production" >&2; exit 1 ;;
+          esac
+          if [[ -z "$VAULT" ]]; then
+            echo "::error::vault must name a project-specific vault" >&2
+            exit 1
+          fi
+
+      - name: Load shared Vercel credentials
+        uses: 1password/load-secrets-action@3a12b0ab99d9cd590a3e9b5a90ea017210ed9556 # v4.0.1
+        with:
+          export-env: true
+          version: 2.30.3
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.SHARED_OP_SERVICE_ACCOUNT_TOKEN }}
+          VERCEL_TOKEN: op://webops-prod-shared/vercel/VERCEL_TOKEN
+          VERCEL_ORG_ID: op://webops-prod-shared/vercel/VERCEL_ORG_ID
+
+      - name: Prepare project secret references
+        env:
+          OP_ENV: ${{ inputs.secrets }}
+          VAULT: ${{ inputs.vault }}
+        run: |
+          set -euo pipefail
+          {
+            while IFS= read -r line || [[ -n "$line" ]]; do
+              line="${line//$'\r'/}"
+              [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+              [[ "$line" =~ ^[[:space:]]*# ]] && continue
+              if [[ "$line" != *=* ]]; then
+                echo "::error::Invalid secrets entry (expected KEY=secret-name): $line" >&2
+                exit 1
+              fi
+              key="${line%%=*}"
+              key="${key//[[:space:]]/}"
+              printf '%s=op://%s/%s\n' "$key" "$VAULT" "${line#*=}"
+            done <<< "$OP_ENV"
+          } >> "$GITHUB_ENV"
+
+      - name: Load project secrets
+        uses: 1password/load-secrets-action@3a12b0ab99d9cd590a3e9b5a90ea017210ed9556 # v4.0.1
+        with:
+          export-env: true
+          version: 2.30.3
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+
+      - name: Prepare build-env
+        id: prepare-build-env
+        env:
+          OP_ENV: ${{ inputs.secrets }}
+        run: |
+          set -euo pipefail
+          delimiter="ghadelimiter_$(openssl rand -hex 16)"
+          {
+            echo "build-env<<${delimiter}"
+            while IFS= read -r line || [[ -n "$line" ]]; do
+              line="${line//$'\r'/}"
+              [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+              [[ "$line" =~ ^[[:space:]]*# ]] && continue
+              if [[ "$line" != *=* ]]; then
+                echo "::error::Invalid secrets entry (expected KEY=secret-name): $line" >&2
+                exit 1
+              fi
+              key="${line%%=*}"
+              key="${key//[[:space:]]/}"
+              [[ "$key" == "VERCEL_PROJECT_ID" ]] && continue
+              if [[ -z "${!key+x}" ]]; then
+                echo "::error::Secret ${key} was not loaded into the environment" >&2
+                exit 1
+              fi
+              printf '%s=%s\n' "$key" "${!key}"
+            done <<< "$OP_ENV"
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Vercel
+        id: deploy
+        uses: amondnet/vercel-action@de09aeac2ace6599ec9b11ef87558759a496bac4 # v42.3.0
+        with:
+          vercel-token: ${{ env.VERCEL_TOKEN }}
+          vercel-org-id: ${{ env.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ env.VERCEL_PROJECT_ID }}
+          vercel-version: 42.3.0
+          vercel-build: true
+          # experimental-api is required so the post-build prebuilt artifact is
+          # uploaded; the CLI path ignores prebuilt after vercel-build in v42.3.0.
+          experimental-api: true
+          target: ${{ inputs.environment }}
+          build-env: ${{ steps.prepare-build-env.outputs.build-env }}
+          github-token: ${{ github.token }}
+          github-comment: true
+          github-deployment: true
+          github-deployment-environment: ${{ inputs.environment }}
