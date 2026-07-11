@@ -1,0 +1,37 @@
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: vercel-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+  pull-requests: write
+
+jobs:
+  deploy:
+    uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
+    with:
+      vault: webops-prod-fapy-hook
+      environment: production
+      secrets: |
+        VERCEL_PROJECT_ID=VERCEL_PROJECT_ID
+        KONG_SECRET=KONG_SECRET
+        CRV_GAUGE_REGISTRY_URL=CRV_GAUGE_REGISTRY_URL
+        CRV_POOLS_URL=CRV_POOLS_URL
+        RPC_CHAIN_URL_1=RPC_CHAIN_URL_1
+        RPC_CHAIN_URL_10=RPC_CHAIN_URL_10
+        RPC_CHAIN_URL_100=RPC_CHAIN_URL_100
+        RPC_CHAIN_URL_137=RPC_CHAIN_URL_137
+        RPC_CHAIN_URL_146=RPC_CHAIN_URL_146
+        RPC_CHAIN_URL_250=RPC_CHAIN_URL_250
+        RPC_CHAIN_URL_42161=RPC_CHAIN_URL_42161
+        RPC_CHAIN_URL_747474=RPC_CHAIN_URL_747474
+        RPC_CHAIN_URL_80094=RPC_CHAIN_URL_80094
+        RPC_CHAIN_URL_8453=RPC_CHAIN_URL_8453
+    secrets: inherit
