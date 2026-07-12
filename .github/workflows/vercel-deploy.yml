@@ -85,6 +85,17 @@ jobs:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           VERCEL_TOKEN: op://${{ inputs.vault }}/VERCEL_TOKEN
           VERCEL_ORG_ID: op://${{ inputs.vault }}/VERCEL_ORG_ID
+          VERCEL_PROJECT_ID: op://${{ inputs.vault }}/VERCEL_PROJECT_ID
+
+      - name: Validate Vercel credentials
+        run: |
+          set -euo pipefail
+          for var in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [[ -z "${!var:-}" ]]; then
+              echo "::error::${var} must resolve from the project vault" >&2
+              exit 1
+            fi
+          done
 
       - name: Prepare build-env
         id: prepare-build-env

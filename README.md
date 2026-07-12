@@ -5,8 +5,8 @@ from 1Password by the calling workflow.
 
 The workflow uses a single caller-provided `OP_SERVICE_ACCOUNT_TOKEN` scoped to
 the project vault named in `vault` (`webops-prod-<project>`). That vault must
-contain `VERCEL_TOKEN`, `VERCEL_ORG_ID`, the Vercel project ID, and the app
-secrets listed in `secrets`.
+contain `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and `VERCEL_PROJECT_ID` (always loaded
+from the vault), plus the app secrets listed in `secrets`.
 
 The workflow pins its actions, Vercel CLI, and 1Password CLI versions. It uses
 `amondnet/vercel-action` with `vercel-build: true` so the runner runs
@@ -35,7 +35,6 @@ jobs:
       vault: webops-prod-my-app
       environment: production
       secrets: |
-        VERCEL_PROJECT_ID=VERCEL_PROJECT_ID
         RPC_URL=RPC_URL
         WEBHOOK_SECRET=WEBHOOK_SECRET
     secrets:

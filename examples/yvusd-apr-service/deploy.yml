@@ -20,7 +20,6 @@ jobs:
       vault: webops-prod-yvusd-apr-service
       environment: production
       secrets: |
-        VERCEL_PROJECT_ID=VERCEL_PROJECT_ID
         ETH_RPC_URL=ETH_RPC_URL
         ARB_RPC_URL=ARB_RPC_URL
         BASE_RPC_URL=BASE_RPC_URL
