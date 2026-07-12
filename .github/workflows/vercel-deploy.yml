@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       vault:
-        description: Project vault named webops-prod-<project> containing the app secrets and Vercel project ID. The caller OP token must have access to this vault and to webops-prod-shared.
+        description: Project vault named webops-prod-<project> containing Vercel credentials, the Vercel project ID, and app secrets. The caller OP token must be scoped to this vault.
         required: true
         type: string
       secrets:
@@ -19,7 +19,7 @@ on:
         default: preview
     secrets:
       OP_SERVICE_ACCOUNT_TOKEN:
-        description: 1Password service account token supplied by the caller. Must have access to webops-prod-shared (Vercel org credentials) and the project vault named in vault.
+        description: 1Password service account token supplied by the caller and scoped to the project vault named in vault.
         required: true
     outputs:
       deployment-url:
@@ -83,8 +83,8 @@ jobs:
           version: 2.30.3
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          VERCEL_TOKEN: op://webops-prod-shared/vercel/VERCEL_TOKEN
-          VERCEL_ORG_ID: op://webops-prod-shared/vercel/VERCEL_ORG_ID
+          VERCEL_TOKEN: op://${{ inputs.vault }}/VERCEL_TOKEN
+          VERCEL_ORG_ID: op://${{ inputs.vault }}/VERCEL_ORG_ID
 
       - name: Prepare build-env
         id: prepare-build-env
@@ -105,7 +105,9 @@ jobs:
               fi
               key="${line%%=*}"
               key="${key//[[:space:]]/}"
-              [[ "$key" == "VERCEL_PROJECT_ID" ]] && continue
+              case "$key" in
+                VERCEL_PROJECT_ID|VERCEL_TOKEN|VERCEL_ORG_ID) continue ;;
+              esac
               if [[ -z "${!key+x}" ]]; then
                 echo "::error::Secret ${key} was not loaded into the environment" >&2
                 exit 1

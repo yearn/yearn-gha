@@ -3,12 +3,10 @@
 Reusable GitHub workflow for deploying Vercel projects with secrets resolved
 from 1Password by the calling workflow.
 
-The workflow uses a single caller-provided `OP_SERVICE_ACCOUNT_TOKEN`. That
-token must have access to:
-
-- `webops-prod-shared` — for `VERCEL_TOKEN` and `VERCEL_ORG_ID`
-- the project vault named in `vault` (`webops-prod-<project>`) — for the
-  Vercel project ID and app secrets
+The workflow uses a single caller-provided `OP_SERVICE_ACCOUNT_TOKEN` scoped to
+the project vault named in `vault` (`webops-prod-<project>`). That vault must
+contain `VERCEL_TOKEN`, `VERCEL_ORG_ID`, the Vercel project ID, and the app
+secrets listed in `secrets`.
 
 The workflow pins its actions, Vercel CLI, and 1Password CLI versions. It uses
 `amondnet/vercel-action` with `vercel-build: true` so the runner runs
@@ -45,8 +43,7 @@ jobs:
 ```
 
 Store `OP_SERVICE_ACCOUNT_TOKEN` as a repository secret on the caller. The
-token must reach both `webops-prod-shared` and the project vault supplied in
-`vault`.
+token must have access only to the project vault supplied in `vault`.
 
 Caller workflows must grant `pull-requests: write` (in addition to
 `contents: read` and `deployments: write`). Reusable workflows cannot elevate
@@ -57,15 +54,15 @@ requests require write access to pull requests.
 
 | Name                | Required | Default   | Description                                                                 |
 | ------------------- | -------- | --------- | --------------------------------------------------------------------------- |
-| `vault`             | yes      | —         | Project vault named `webops-prod-<project>`; the caller OP token must reach it. |
+| `vault`             | yes      | —         | Project vault named `webops-prod-<project>`; source of all OP secrets.      |
 | `secrets`           | no       | `""`      | Multiline `KEY=secret-name` entries resolved from the project vault.        |
 | `environment`       | no       | `preview` | Deploy target. Only `preview` and `production` are accepted.                |
 
 ## Secrets
 
-| Name                       | Required | Description                                                                                          |
-| -------------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| `OP_SERVICE_ACCOUNT_TOKEN` | yes      | Caller-provided 1Password service account token with access to `webops-prod-shared` and the project vault. |
+| Name                       | Required | Description                                                                 |
+| -------------------------- | -------- | --------------------------------------------------------------------------- |
+| `OP_SERVICE_ACCOUNT_TOKEN` | yes      | Caller-provided 1Password service account token scoped to the project vault. |
 
 ## Outputs
 
