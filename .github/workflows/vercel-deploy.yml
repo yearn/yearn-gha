@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       vault:
-        description: Project vault named webops-prod-<project> containing the app secrets and Vercel project ID. The supplied OP token must be scoped to this vault.
+        description: Project vault named webops-prod-<project> containing the app secrets and Vercel project ID. The caller OP token must have access to this vault and to webops-prod-shared.
         required: true
         type: string
       secrets:
@@ -19,7 +19,7 @@ on:
         default: preview
     secrets:
       OP_SERVICE_ACCOUNT_TOKEN:
-        description: Project service account supplied by the caller and scoped to this repository's vault.
+        description: 1Password service account token supplied by the caller. Must have access to webops-prod-shared (Vercel org credentials) and the project vault named in vault.
         required: true
     outputs:
       deployment-url:
@@ -55,16 +55,6 @@ jobs:
             exit 1
           fi
 
-      - name: Load shared Vercel credentials
-        uses: 1password/load-secrets-action@3a12b0ab99d9cd590a3e9b5a90ea017210ed9556 # v4.0.1
-        with:
-          export-env: true
-          version: 2.30.3
-        env:
-          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.SHARED_OP_SERVICE_ACCOUNT_TOKEN }}
-          VERCEL_TOKEN: op://webops-prod-shared/vercel/VERCEL_TOKEN
-          VERCEL_ORG_ID: op://webops-prod-shared/vercel/VERCEL_ORG_ID
-
       - name: Prepare project secret references
         env:
           OP_ENV: ${{ inputs.secrets }}
@@ -86,13 +76,15 @@ jobs:
             done <<< "$OP_ENV"
           } >> "$GITHUB_ENV"
 
-      - name: Load project secrets
+      - name: Load secrets from 1Password
         uses: 1password/load-secrets-action@3a12b0ab99d9cd590a3e9b5a90ea017210ed9556 # v4.0.1
         with:
           export-env: true
           version: 2.30.3
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          VERCEL_TOKEN: op://webops-prod-shared/vercel/VERCEL_TOKEN
+          VERCEL_ORG_ID: op://webops-prod-shared/vercel/VERCEL_ORG_ID
 
       - name: Prepare build-env
         id: prepare-build-env
