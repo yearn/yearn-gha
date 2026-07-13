@@ -1,0 +1,34 @@
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: vercel-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+  pull-requests: write
+
+jobs:
+  deploy:
+    uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
+    with:
+      vault: webops-prod-katana-apr-service
+      environment: production
+      secrets: |
+        RPC_URL_KATANA=katana-apr-service/RPC_URL_KATANA
+        KONG_WEBHOOK_SECRET=katana-apr-service/KONG_WEBHOOK_SECRET
+        COINGECKO_API_KEY=katana-apr-service/COINGECKO_API_KEY
+        KONG_BASE_URI=katana-apr-service/KONG_BASE_URI
+        YDAEMON_BASE_URI=katana-apr-service/YDAEMON_BASE_URI
+        MERKL_BASE_URI=katana-apr-service/MERKL_BASE_URI
+        MERKL_API_KEY=katana-apr-service/MERKL_API_KEY
+        COINGECKO_BASE_URI=katana-apr-service/COINGECKO_BASE_URI
+        COINGECKO_KATANA_COIN_ID=katana-apr-service/COINGECKO_KATANA_COIN_ID
+        KATANA_APR_SERVICE_API=katana-apr-service/KATANA_APR_SERVICE_API
+    secrets:
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
