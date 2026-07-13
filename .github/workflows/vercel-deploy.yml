@@ -155,10 +155,13 @@ jobs:
           vercel-token: ${{ env.VERCEL_TOKEN }}
           vercel-org-id: ${{ env.VERCEL_ORG_ID }}
           vercel-project-id: ${{ env.VERCEL_PROJECT_ID }}
-          vercel-version: 42.3.0
+          # 42.3.0 predates VERCEL_TOKEN env-var auth support (added in CLI
+          # v50.0.0); vercel-action authenticates `pull`/`build` only via that
+          # env var, so anything older fails with "No existing credentials found".
+          vercel-version: 55.0.0
           vercel-build: true
           # experimental-api is required so the post-build prebuilt artifact is
-          # uploaded; the CLI path ignores prebuilt after vercel-build in v42.3.0.
+          # uploaded; the CLI path ignores prebuilt after vercel-build.
           experimental-api: true
           target: ${{ inputs.environment }}
           build-env: ${{ steps.prepare-build-env.outputs.build-env }}
