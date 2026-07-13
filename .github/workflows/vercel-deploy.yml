@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       vault:
-        description: Project vault named webops-prod-<project> containing Vercel credentials, the Vercel project ID, and app secrets. The caller OP token must be scoped to this vault.
+        description: Project vault named webops-prod-<project> containing the Vercel project ID and app secrets. The caller OP token must also be scoped to webops-prod-shared for shared Vercel credentials.
         required: true
         type: string
       secrets:
@@ -19,7 +19,7 @@ on:
         default: preview
     secrets:
       OP_SERVICE_ACCOUNT_TOKEN:
-        description: 1Password service account token supplied by the caller and scoped to the project vault named in vault.
+        description: 1Password service account token supplied by the caller and scoped to webops-prod-shared and the project vault named in vault.
         required: true
     outputs:
       deployment-url:
@@ -38,7 +38,7 @@ jobs:
       deployment-url: ${{ steps.deploy.outputs.preview-url }}
     steps:
       - name: Checkout app repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.4.0
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Validate deployment inputs
         env:
@@ -54,13 +54,24 @@ jobs:
             echo "::error::vault must name a project-specific vault" >&2
             exit 1
           fi
+          if [[ "$VAULT" != webops-prod-* || "$VAULT" == webops-prod-shared ]]; then
+            echo "::error::vault must name a project vault in the form webops-prod-<project>" >&2
+            exit 1
+          fi
 
       - name: Prepare project secret references
+        id: prepare-project-secret-references
         env:
           OP_ENV: ${{ inputs.secrets }}
           VAULT: ${{ inputs.vault }}
         run: |
           set -euo pipefail
+          project_name="${VAULT#webops-prod-}"
+          if [[ -z "$project_name" ]]; then
+            echo "::error::vault must include a project name" >&2
+            exit 1
+          fi
+          echo "vercel-project-id=op://${VAULT}/${project_name}/VERCEL_PROJECT_ID" >> "$GITHUB_OUTPUT"
           {
             while IFS= read -r line || [[ -n "$line" ]]; do
               line="${line//$'\r'/}"
@@ -72,7 +83,16 @@ jobs:
               fi
               key="${line%%=*}"
               key="${key//[[:space:]]/}"
-              printf '%s=op://%s/%s\n' "$key" "$VAULT" "${line#*=}"
+              reference="${line#*=}"
+              if [[ -z "$key" || -z "$reference" ]]; then
+                echo "::error::Invalid secrets entry (expected KEY=secret-name): $line" >&2
+                exit 1
+              fi
+              if [[ "$reference" == op://* ]]; then
+                printf '%s=%s\n' "$key" "$reference"
+              else
+                printf '%s=op://%s/%s/%s\n' "$key" "$VAULT" "$project_name" "$reference"
+              fi
             done <<< "$OP_ENV"
           } >> "$GITHUB_ENV"
 
@@ -83,16 +103,16 @@ jobs:
           version: 2.30.3
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          VERCEL_TOKEN: op://${{ inputs.vault }}/VERCEL_TOKEN
-          VERCEL_ORG_ID: op://${{ inputs.vault }}/VERCEL_ORG_ID
-          VERCEL_PROJECT_ID: op://${{ inputs.vault }}/VERCEL_PROJECT_ID
+          VERCEL_TOKEN: op://webops-prod-shared/vercel/VERCEL_TOKEN
+          VERCEL_ORG_ID: op://webops-prod-shared/vercel/VERCEL_ORG_ID
+          VERCEL_PROJECT_ID: ${{ steps.prepare-project-secret-references.outputs.vercel-project-id }}
 
       - name: Validate Vercel credentials
         run: |
           set -euo pipefail
           for var in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
             if [[ -z "${!var:-}" ]]; then
-              echo "::error::${var} must resolve from the project vault" >&2
+              echo "::error::${var} must resolve from its configured 1Password vault" >&2
               exit 1
             fi
           done
@@ -116,6 +136,11 @@ jobs:
               fi
               key="${line%%=*}"
               key="${key//[[:space:]]/}"
+              reference="${line#*=}"
+              if [[ -z "$key" || -z "$reference" ]]; then
+                echo "::error::Invalid secrets entry (expected KEY=secret-name): $line" >&2
+                exit 1
+              fi
               case "$key" in
                 VERCEL_PROJECT_ID|VERCEL_TOKEN|VERCEL_ORG_ID) continue ;;
               esac
