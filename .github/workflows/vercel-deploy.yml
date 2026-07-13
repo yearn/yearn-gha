@@ -40,6 +40,14 @@ jobs:
       - name: Checkout app repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # vercel-build runs the install/build commands locally on this runner
+      # rather than on Vercel's remote infra, so a bun-managed app needs bun
+      # available here; npm/yarn projects work with the runner's preinstalled
+      # tooling.
+      - name: Set up bun
+        if: hashFiles('bun.lock', 'bun.lockb') != ''
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
       - name: Validate deployment inputs
         env:
           ENVIRONMENT: ${{ inputs.environment }}
