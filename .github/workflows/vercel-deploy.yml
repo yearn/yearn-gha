@@ -86,7 +86,7 @@ jobs:
               if [[ "$reference" == op://* ]]; then
                 printf '%s=%s\n' "$key" "$reference"
               else
-                printf '%s=op://%s/VERCEL_PROJECT_ID/%s\n' "$key" "$VAULT" "$reference"
+                printf '%s=op://%s/%s\n' "$key" "$VAULT" "$reference"
               fi
             done <<< "$OP_ENV"
           } >> "$GITHUB_ENV"

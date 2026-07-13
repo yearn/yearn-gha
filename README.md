@@ -6,10 +6,10 @@ from 1Password by the calling workflow.
 The workflow uses a single caller-provided `OP_SERVICE_ACCOUNT_TOKEN` with
 read-only access to exactly two vaults: `webops-prod-shared` and the project
 vault named in `vault` (`webops-prod-<project>`). `webops-prod-shared` contains
-`VERCEL_TOKEN` and `VERCEL_ORG_ID`; the project vault contains
-`VERCEL_PROJECT_ID` and the app secrets listed in `secrets`. Project-scoped
-secrets resolve as `op://<vault>/<project-name>/<secret-name>`, where
-`project-name` is the portion of `vault` following `webops-prod-`.
+`VERCEL_TOKEN` and `VERCEL_ORG_ID`; the project vault contains a
+`VERCEL_PROJECT_ID` item and the app secrets listed in `secrets`. Each entry
+in `secrets` is `KEY=item/field`, resolved as `op://<vault>/item/field`
+(or pass a full `op://...` reference to point outside the project vault).
 
 The workflow pins its actions, Vercel CLI, and 1Password CLI versions. It uses
 `amondnet/vercel-action` with `vercel-build: true` so the runner runs
@@ -38,8 +38,8 @@ jobs:
       vault: webops-prod-my-app
       environment: production
       secrets: |
-        RPC_URL=RPC_URL
-        WEBHOOK_SECRET=WEBHOOK_SECRET
+        RPC_URL=my-app/RPC_URL
+        WEBHOOK_SECRET=my-app/WEBHOOK_SECRET
     secrets:
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 ```
@@ -58,7 +58,7 @@ requests require write access to pull requests.
 | Name                | Required | Default   | Description                                                                 |
 | ------------------- | -------- | --------- | --------------------------------------------------------------------------- |
 | `vault`             | yes      | —         | Project vault named `webops-prod-<project>`; source of the project-specific OP secrets. |
-| `secrets`           | no       | `""`      | Multiline `KEY=secret-name` entries resolved from the project vault.        |
+| `secrets`           | no       | `""`      | Multiline `KEY=item/field` entries resolved from the project vault (or a full `op://...` reference). |
 | `environment`       | no       | `preview` | Deploy target. Only `preview` and `production` are accepted.                |
 
 ## Secrets
