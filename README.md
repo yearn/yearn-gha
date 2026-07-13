@@ -11,7 +11,7 @@ vault named in `vault` (`webops-prod-<project>`). `webops-prod-shared` contains
 in `secrets` is `KEY=item/field`, resolved as `op://<vault>/item/field`
 (or pass a full `op://...` reference to point outside the project vault).
 
-The workflow pins its actions, Vercel CLI, and 1Password CLI versions. It uses
+The workflow pins its actions, Vercel CLI, 1Password CLI, and bun versions. It uses
 `amondnet/vercel-action` with `vercel-build: true` so the runner runs
 `vercel pull → vercel build → deploy --prebuilt`, inlines project secrets via
 `build-env`, creates GitHub Deployment records, and publishes preview URLs on
