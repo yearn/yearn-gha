@@ -216,7 +216,7 @@ Use this when moving a project onto the central flow (and when reviewing PRs aga
 3. Confirm shared `CLOUDFLARE` / `CLOUDFLARE_API_TOKEN` in `webops-prod-shared`; record exact CF token permissions on the item; accept or mitigate **account-wide / cross-Worker** blast radius.
 4. Move app secrets into the project vault (DRY — shared values only in `webops-prod-shared`).
 5. Mint a **read-only** service account for exactly `webops-prod-shared` + `webops-prod-<project>`; store token as repo secret `OP_SERVICE_ACCOUNT_TOKEN` (optional: GitHub Environment + required reviewers).
-6. Add thin caller workflow pinned to a **reviewed SHA** of `yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml` (or `@main` only under explicit accept-risk). Include **concurrency** group; do **not** set `environment` until multi-env is fixed.
+6. Add thin caller workflow pinned to a **reviewed SHA** of `yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml` (or `@main` only under explicit accept-risk). Include **concurrency** group; do **not** set `environment` (not supported today).
 7. **Disable and verify** Cloudflare Git / Workers Builds / dashboard auto-deploy for this Worker (check dashboard after toggle; note the product name in the PR).
 8. Reduce routine human deploy rights on Cloudflare where ship should go through GitHub; document remaining break-glass paths.
 9. Enable branch ruleset on `main` (PR + ≥1 approval) for **public** repos. Do not migrate private repos on free plan without an explicit accept-risk decision.

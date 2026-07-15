@@ -81,12 +81,14 @@ See `examples/` for the current Katana APR, yvUSD APR, and fapy-hook shapes.
 ## Cloudflare Workers
 
 `.github/workflows/cloudflare-deploy.yml` deploys a Bun-based Cloudflare Worker.
-It installs dependencies with `bun install --frozen-lockfile`, resolves
-`CLOUDFLARE_API_TOKEN` from `webops-prod-shared/CLOUDFLARE` and the account ID
-plus requested Worker secrets from the project vault, uploads those Worker
-secrets with `wrangler secret bulk`, then runs `bun run deploy`. The project
-vault must include `CLOUDFLARE_ACCOUNT_ID`; do not include either Cloudflare
-credential in `secrets`.
+Callers must ship a committed `bun.lock`/`bun.lockb`, a `deploy` script, and
+`wrangler` as a direct dependency. The workflow installs with
+`bun install --frozen-lockfile` (before any secrets load), resolves
+`CLOUDFLARE_API_TOKEN` from `webops-prod-shared/CLOUDFLARE` and
+`CLOUDFLARE_ACCOUNT_ID` from the project vault, uploads declared Worker secrets
+with `wrangler secret bulk`, then runs `bun run deploy`. Do not list either
+Cloudflare credential in `secrets`. Named Wrangler environments (`--env`) are
+not supported.
 
 ```yaml
 name: Deploy Worker
@@ -94,6 +96,11 @@ name: Deploy Worker
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cloudflare-deploy-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -106,13 +113,11 @@ jobs:
       secrets: |
         DATABASE_URL=my-worker/DATABASE_URL
         API_KEY=my-worker/API_KEY
-      # Omit environment for the default Worker environment.
-      # environment: staging
     secrets:
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 ```
 
 `vault` and `secrets` use the same `KEY=item/field` (or full `op://...`)
 syntax as the Vercel workflow. The caller's 1Password token needs read access
-to both `webops-prod-shared` and the selected project vault. `environment` is
-optional and passes a named environment to Wrangler as `--env <environment>`.
+to both `webops-prod-shared` and the selected project vault. Callers must set a
+concurrency group so parallel deploys do not interleave secret bulk and deploy.
