@@ -1,4 +1,4 @@
-# Vercel deploy
+# Yearn reusable deployment workflows
 
 Reusable GitHub workflow for deploying Vercel projects with secrets resolved
 from 1Password by the calling workflow.
@@ -77,3 +77,42 @@ Consume it from a downstream job with
 `${{ needs.deploy.outputs.deployment-url }}`.
 
 See `examples/` for the current Katana APR, yvUSD APR, and fapy-hook shapes.
+
+## Cloudflare Workers
+
+`.github/workflows/cloudflare-deploy.yml` deploys a Bun-based Cloudflare Worker.
+It installs dependencies with `bun install --frozen-lockfile`, resolves
+`CLOUDFLARE_API_TOKEN` from `webops-prod-shared/CLOUDFLARE` and the account ID
+plus requested Worker secrets from the project vault, uploads those Worker
+secrets with `wrangler secret bulk`, then runs `bun run deploy`. The project
+vault must include `CLOUDFLARE_ACCOUNT_ID`; do not include either Cloudflare
+credential in `secrets`.
+
+```yaml
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@main
+    with:
+      vault: webops-prod-my-worker
+      secrets: |
+        DATABASE_URL=my-worker/DATABASE_URL
+        API_KEY=my-worker/API_KEY
+      # Omit environment for the default Worker environment.
+      # environment: staging
+    secrets:
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+```
+
+`vault` and `secrets` use the same `KEY=item/field` (or full `op://...`)
+syntax as the Vercel workflow. The caller's 1Password token needs read access
+to both `webops-prod-shared` and the selected project vault. `environment` is
+optional and passes a named environment to Wrangler as `--env <environment>`.
