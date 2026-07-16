@@ -1,0 +1,39 @@
+name: Deploy Worker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cloudflare-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    # Prefer a SHA pin of yearn-gha when policy requires it (floating @main trusts central main).
+    uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@main
+    with:
+      vault: webops-prod-price-service
+      secrets: |
+        DATABASE_URL=price-service/DATABASE_URL
+        API_KEY_KONG=price-service/API_KEY_KONG
+        API_KEY_FRONTEND=price-service/API_KEY_FRONTEND
+        API_KEY_YEARN_DATA=price-service/API_KEY_YEARN_DATA
+        API_KEY_DEV_MURDERTEETH=price-service/API_KEY_DEV_MURDERTEETH
+        ENSO_API_KEY=price-service/ENSO_API_KEY
+        RPC_URL_1=price-service/RPC_URL_1
+        RPC_URL_10=price-service/RPC_URL_10
+        RPC_URL_100=price-service/RPC_URL_100
+        RPC_URL_137=price-service/RPC_URL_137
+        RPC_URL_146=price-service/RPC_URL_146
+        RPC_URL_250=price-service/RPC_URL_250
+        RPC_URL_8453=price-service/RPC_URL_8453
+        RPC_URL_42161=price-service/RPC_URL_42161
+        RPC_URL_80094=price-service/RPC_URL_80094
+        RPC_URL_747474=price-service/RPC_URL_747474
+    secrets:
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
