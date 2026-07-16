@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       vault:
-        description: Project vault named webops-prod-<project> containing the Cloudflare account ID and Worker secrets. The caller OP token must also be scoped to webops-prod-shared for the Cloudflare API token.
+        description: Project vault named webops-prod-<project> containing Worker secrets. The caller OP token must also be scoped to webops-prod-shared for shared Cloudflare credentials.
         required: true
         type: string
       secrets:
@@ -32,52 +32,28 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - name: Validate app prerequisites
+      - name: Validate deployment inputs
+        env:
+          VAULT: ${{ inputs.vault }}
         run: |
           set -euo pipefail
-          if [[ ! -f bun.lock && ! -f bun.lockb ]]; then
-            echo "::error::Committed bun.lock or bun.lockb is required (bun-only workflow)" >&2
-            exit 1
-          fi
-          if [[ ! -f package.json ]]; then
-            echo "::error::package.json is required" >&2
-            exit 1
-          fi
-          if ! bun -e 'const p=require("./package.json"); if(!p.scripts?.deploy) process.exit(1)'; then
-            echo "::error::package.json must define a deploy script that runs Wrangler" >&2
-            exit 1
-          fi
-          if ! bun -e 'const p=require("./package.json"); const d={...p.dependencies,...p.devDependencies}; if(!d?.wrangler) process.exit(1)'; then
-            echo "::error::wrangler must be a direct, version-pinned dependency so bunx resolves the lockfile install" >&2
+          if [[ "$VAULT" != webops-prod-* || "$VAULT" == webops-prod-shared ]]; then
+            echo "::error::vault must name a project vault in the form webops-prod-<project>" >&2
             exit 1
           fi
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Validate deployment inputs
-        env:
-          VAULT: ${{ inputs.vault }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$VAULT" ]]; then
-            echo "::error::vault must name a project-specific vault" >&2
-            exit 1
-          fi
-          if [[ "$VAULT" != webops-prod-* || "$VAULT" == webops-prod-shared ]]; then
-            echo "::error::vault must name a project vault in the form webops-prod-<project>" >&2
-            exit 1
-          fi
-
       - name: Prepare project secret references
-        id: prepare-project-secret-references
         env:
           OP_ENV: ${{ inputs.secrets }}
           VAULT: ${{ inputs.vault }}
         run: |
           set -euo pipefail
-          echo "cloudflare-api-token=op://webops-prod-shared/CLOUDFLARE/CLOUDFLARE_API_TOKEN" >> "$GITHUB_OUTPUT"
-          echo "cloudflare-account-id=op://${VAULT}/CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_ACCOUNT_ID" >> "$GITHUB_OUTPUT"
+          keys_file="$RUNNER_TEMP/cloudflare-secret-keys"
+          : > "$keys_file"
+
           while IFS= read -r line || [[ -n "$line" ]]; do
             line="${line//$'\r'/}"
             [[ "$line" =~ ^[[:space:]]*$ ]] && continue
@@ -86,6 +62,7 @@ jobs:
               echo "::error::Invalid secrets entry (expected KEY=item/field or op://...): $line" >&2
               exit 1
             fi
+
             key="${line%%=*}"
             key="${key//[[:space:]]/}"
             reference="${line#*=}"
@@ -99,12 +76,14 @@ jobs:
                 exit 1
                 ;;
             esac
+
             if [[ "$reference" == op://* ]]; then
-              printf '%s=%s\n' "$key" "$reference"
+              printf '%s=%s\n' "$key" "$reference" >> "$GITHUB_ENV"
             else
-              printf '%s=op://%s/%s\n' "$key" "$VAULT" "$reference"
+              printf '%s=op://%s/%s\n' "$key" "$VAULT" "$reference" >> "$GITHUB_ENV"
             fi
-          done <<< "$OP_ENV" >> "$GITHUB_ENV"
+            printf '%s\n' "$key" >> "$keys_file"
+          done <<< "$OP_ENV"
 
       - name: Load secrets from 1Password
         uses: 1password/load-secrets-action@3a12b0ab99d9cd590a3e9b5a90ea017210ed9556 # v4.0.1
@@ -113,43 +92,39 @@ jobs:
           version: 2.30.3
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          CLOUDFLARE_API_TOKEN: ${{ steps.prepare-project-secret-references.outputs.cloudflare-api-token }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ steps.prepare-project-secret-references.outputs.cloudflare-account-id }}
+          CLOUDFLARE_API_TOKEN: op://webops-prod-shared/CLOUDFLARE/CLOUDFLARE_API_TOKEN
+          CLOUDFLARE_ACCOUNT_ID: op://webops-prod-shared/CLOUDFLARE/CLOUDFLARE_ACCOUNT_ID
 
       - name: Validate Cloudflare credentials
         run: |
           set -euo pipefail
           for var in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
             if [[ -z "${!var:-}" ]]; then
-              echo "::error::${var} must resolve from its configured 1Password vault" >&2
+              echo "::error::${var} must resolve from webops-prod-shared/CLOUDFLARE" >&2
               exit 1
             fi
           done
 
       - name: Upload secrets to Cloudflare
-        env:
-          OP_ENV: ${{ inputs.secrets }}
         run: |
           set -euo pipefail
+          keys_file="$RUNNER_TEMP/cloudflare-secret-keys"
+          if [[ ! -s "$keys_file" ]]; then
+            echo "No Worker secrets declared; skipping secret bulk"
+            exit 0
+          fi
+
           secrets='{}'
-          count=0
-          while IFS= read -r line || [[ -n "$line" ]]; do
-            line="${line//$'\r'/}"
-            [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-            [[ "$line" =~ ^[[:space:]]*# ]] && continue
-            key="${line%%=*}"
-            key="${key//[[:space:]]/}"
+          while IFS= read -r key || [[ -n "$key" ]]; do
             value="${!key:-}"
             if [[ -z "$value" ]]; then
               echo "::error::Secret ${key} was not loaded into the environment" >&2
               exit 1
             fi
             secrets="$(jq --arg key "$key" --arg value "$value" '. + {($key): $value}' <<< "$secrets")"
-            ((count += 1))
-          done <<< "$OP_ENV"
-          if (( count > 0 )); then
-            printf '%s\n' "$secrets" | bunx wrangler secret bulk
-          fi
+          done < "$keys_file"
+
+          printf '%s\n' "$secrets" | bunx wrangler secret bulk
 
       - name: Deploy Worker
         run: bun run deploy
