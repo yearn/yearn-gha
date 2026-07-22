@@ -148,13 +148,12 @@ jobs:
           OP_ENV: ${{ inputs.secrets }}
         run: node .yearn-gha/scripts/run-vercel-build.mjs
 
-      # Only prebuilt output + project link — never env files (may contain
-      # NEXT_PUBLIC values) or anything the deploy job would execute.
-      # -h dereferences the symlinks .vercel/output uses for traced deps —
-      # they point into this runner's node_modules, which the deploy runner
-      # doesn't have, so the tarball must carry the real file contents.
+      # Prebuilt output + project link + the node_modules files that
+      # .vc-config.json filePathMap entries make the deploy CLI read from
+      # disk — never env files. Tar (with symlinks dereferenced) because
+      # zip-based artifact transfer breaks symlinks.
       - name: Pack prebuilt output
-        run: tar -czhf vercel-prebuilt.tgz .vercel/output .vercel/project.json
+        run: node .yearn-gha/scripts/pack-prebuilt-output.mjs
 
       - name: Upload prebuilt artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
