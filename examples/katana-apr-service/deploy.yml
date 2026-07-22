@@ -5,10 +5,6 @@ on:
   push:
     branches: [main]
 
-concurrency:
-  group: vercel-deploy-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 permissions:
   contents: read
   deployments: write

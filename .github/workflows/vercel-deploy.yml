@@ -35,6 +35,9 @@ jobs:
   deploy:
     name: Deploy to Vercel
     runs-on: ubuntu-latest
+    concurrency:
+      group: vercel-deploy-${{ inputs.vault }}-${{ inputs.environment }}
+      cancel-in-progress: false
     permissions:
       contents: read
       deployments: write
@@ -44,6 +47,10 @@ jobs:
     steps:
       - name: Checkout app repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Nothing after checkout needs git credentials, and the app build
+          # must not be able to read the GitHub token from .git/config.
+          persist-credentials: false
 
       # bun installs the Vercel CLI and provides the runtime for bun-managed
       # apps built locally by `vercel build`.
@@ -64,6 +71,7 @@ jobs:
           repository: yearn/yearn-gha
           ref: ${{ inputs.workflows-ref || github.job_workflow_sha }}
           path: .yearn-gha
+          persist-credentials: false
 
       - name: Validate deployment inputs
         env:
@@ -78,10 +86,14 @@ jobs:
           VAULT: ${{ inputs.vault }}
         run: node .yearn-gha/scripts/prepare-project-secret-references.mjs
 
+      # export-env is off on purpose: exported env vars would be inherited by
+      # `vercel build`, which runs the app's install/build scripts. Secrets are
+      # exposed as step outputs instead and scoped per-step below.
       - name: Load secrets from 1Password
+        id: op
         uses: 1password/load-secrets-action@3a12b0ab99d9cd590a3e9b5a90ea017210ed9556 # v4.0.1
         with:
-          export-env: true
+          export-env: false
           version: 2.30.3
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
@@ -90,6 +102,10 @@ jobs:
           VERCEL_PROJECT_ID: ${{ steps.prepare-project-secret-references.outputs.vercel-project-id }}
 
       - name: Validate Vercel credentials
+        env:
+          VERCEL_TOKEN: ${{ steps.op.outputs.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ steps.op.outputs.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ steps.op.outputs.VERCEL_PROJECT_ID }}
         run: |
           set -euo pipefail
           for var in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
@@ -106,10 +122,22 @@ jobs:
         env:
           OP_ENV: ${{ inputs.secrets }}
           ENVIRONMENT: ${{ inputs.environment }}
+          VERCEL_TOKEN: ${{ steps.op.outputs.VERCEL_TOKEN }}
+          SECRETS_JSON: ${{ toJSON(steps.op.outputs) }}
         run: node .yearn-gha/scripts/push-env-vars-to-vercel.mjs
 
-      - name: Deploy to Vercel
-        id: deploy
+      - name: Pull Vercel project settings
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          VERCEL_TOKEN: ${{ steps.op.outputs.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ steps.op.outputs.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ steps.op.outputs.VERCEL_PROJECT_ID }}
+        run: vercel pull --yes --environment="$ENVIRONMENT" --token="$VERCEL_TOKEN"
+
+      # Runs the app's install/build scripts, so no Vercel or GitHub
+      # credentials may be present in this step's environment. Project
+      # linkage and app env vars come from the `vercel pull` output above.
+      - name: Build
         env:
           ENVIRONMENT: ${{ inputs.environment }}
         run: |
@@ -118,15 +146,30 @@ jobs:
           if [[ "$ENVIRONMENT" == "production" ]]; then
             prod_flag=(--prod)
           fi
-          vercel pull --yes --environment="$ENVIRONMENT" --token="$VERCEL_TOKEN"
-          vercel build "${prod_flag[@]}" --token="$VERCEL_TOKEN"
+          vercel build "${prod_flag[@]}"
+
+      - name: Deploy to Vercel
+        id: deploy
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          VERCEL_TOKEN: ${{ steps.op.outputs.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ steps.op.outputs.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ steps.op.outputs.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          prod_flag=()
+          if [[ "$ENVIRONMENT" == "production" ]]; then
+            prod_flag=(--prod)
+          fi
           url="$(vercel deploy --prebuilt "${prod_flag[@]}" --token="$VERCEL_TOKEN")"
           echo "deployment-url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub deployment record
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          # github.sha is the merge commit on pull_request events — the code
+          # actually checked out and built, unlike the PR head sha.
+          REF: ${{ github.sha }}
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
           ENVIRONMENT: ${{ inputs.environment }}
         run: node .yearn-gha/scripts/create-github-deployment.mjs

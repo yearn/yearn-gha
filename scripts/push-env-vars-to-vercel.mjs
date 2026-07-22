@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 const opEnv = process.env.OP_ENV ?? "";
 const environment = process.env.ENVIRONMENT ?? "";
 const vercelToken = process.env.VERCEL_TOKEN ?? "";
+const secrets = JSON.parse(process.env.SECRETS_JSON ?? "{}");
 
 function fail(message) {
   console.error(`::error::${message}`);
@@ -39,9 +40,9 @@ for (const rawLine of opEnv.split("\n")) {
   if (!line.trim() || line.trimStart().startsWith("#")) continue;
   const key = line.split("=")[0].replace(/\s/g, "");
   if (vercelCredentialKeys.has(key)) continue;
-  const value = process.env[key];
+  const value = secrets[key];
   if (value === undefined) {
-    fail(`Secret ${key} was not loaded into the environment`);
+    fail(`Secret ${key} was not loaded from 1Password`);
   }
   const result = spawnSync(
     "vercel",

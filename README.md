@@ -24,6 +24,12 @@ GitHub Deployment record pointing at the URL, and on `pull_request` events it
 also keeps a single marker-tagged PR comment updated with the latest
 deployment URL.
 
+Secrets are scoped to the steps that need them, never exported to the job
+environment: `vercel build` runs the app's install/build scripts, and those
+must not be able to read `VERCEL_TOKEN` or the GitHub token (checkouts use
+`persist-credentials: false`). The build receives app env vars only through
+`vercel pull`.
+
 ## Usage
 
 ```yaml
@@ -33,10 +39,6 @@ on:
   pull_request:
   push:
     branches: [main]
-
-concurrency:
-  group: vercel-deploy-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -58,6 +60,11 @@ jobs:
 
 When pinning `uses` to a commit sha instead of `main`, pass the same sha as
 `workflows-ref` so the helper scripts are checked out at the matching version.
+
+Deploys are serialized per project and environment by a job-level concurrency
+group inside the workflow (Vercel env vars are shared per project+environment,
+so concurrent runs must not interleave). Callers don't need their own
+`concurrency` block.
 
 Store `OP_SERVICE_ACCOUNT_TOKEN` as a repository secret on the caller. The
 token must have read-only access only to `webops-prod-shared` and the project
