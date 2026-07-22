@@ -123,6 +123,8 @@ jobs:
           OP_ENV: ${{ inputs.secrets }}
           ENVIRONMENT: ${{ inputs.environment }}
           VERCEL_TOKEN: ${{ steps.op.outputs.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ steps.op.outputs.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ steps.op.outputs.VERCEL_PROJECT_ID }}
           SECRETS_JSON: ${{ toJSON(steps.op.outputs) }}
         run: node .yearn-gha/scripts/push-env-vars-to-vercel.mjs
 
@@ -135,18 +137,14 @@ jobs:
         run: vercel pull --yes --environment="$ENVIRONMENT" --token="$VERCEL_TOKEN"
 
       # Runs the app's install/build scripts, so no Vercel or GitHub
-      # credentials may be present in this step's environment. Project
-      # linkage and app env vars come from the `vercel pull` output above.
+      # credentials may be present in this step's environment. The script
+      # also deletes the op:// reference vars that GITHUB_ENV leaks into the
+      # job env, so app env vars come only from the `vercel pull` output above.
       - name: Build
         env:
+          OP_ENV: ${{ inputs.secrets }}
           ENVIRONMENT: ${{ inputs.environment }}
-        run: |
-          set -euo pipefail
-          prod_flag=()
-          if [[ "$ENVIRONMENT" == "production" ]]; then
-            prod_flag=(--prod)
-          fi
-          vercel build "${prod_flag[@]}"
+        run: node .yearn-gha/scripts/run-vercel-build.mjs
 
       - name: Deploy to Vercel
         id: deploy
