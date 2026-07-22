@@ -1,12 +1,13 @@
 name: Deploy to Vercel
 
 on:
+  pull_request:
   push:
     branches: [main]
 
 concurrency:
-  group: vercel-production
-  cancel-in-progress: false
+  group: vercel-deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -18,7 +19,7 @@ jobs:
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
     with:
       vault: webops-prod-katana-apr-service
-      environment: production
+      environment: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
       secrets: |
         RPC_URL_KATANA=katana-apr-service/RPC_URL_KATANA
         KONG_WEBHOOK_SECRET=katana-apr-service/KONG_WEBHOOK_SECRET

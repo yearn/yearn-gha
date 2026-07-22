@@ -10,6 +10,8 @@ a `vercel` item with `VERCEL_TOKEN` and `VERCEL_ORG_ID`; the project vault
 contains a `VERCEL_PROJECT_ID` item and the app secrets listed in `secrets`.
 Each entry in `secrets` is `KEY=item/field`, resolved as `op://<vault>/item/field`
 (or pass a full `op://...` reference to point outside the project vault).
+Entries keyed `VERCEL_TOKEN`, `VERCEL_ORG_ID`, or `VERCEL_PROJECT_ID` are
+never pushed to Vercel; those credentials are managed by the workflow.
 
 The workflow pins its actions, Vercel CLI, 1Password CLI, and bun versions. It
 drives the Vercel CLI directly: 1Password is the source of truth, so before
@@ -28,8 +30,13 @@ deployment URL.
 name: Deploy to Vercel
 
 on:
+  pull_request:
   push:
     branches: [main]
+
+concurrency:
+  group: vercel-deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -41,13 +48,16 @@ jobs:
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
     with:
       vault: webops-prod-my-app
-      environment: production
+      environment: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
       secrets: |
         RPC_URL=my-app/RPC_URL
         WEBHOOK_SECRET=my-app/WEBHOOK_SECRET
     secrets:
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
 ```
+
+When pinning `uses` to a commit sha instead of `main`, pass the same sha as
+`workflows-ref` so the helper scripts are checked out at the matching version.
 
 Store `OP_SERVICE_ACCOUNT_TOKEN` as a repository secret on the caller. The
 token must have read-only access only to `webops-prod-shared` and the project
