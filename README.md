@@ -16,11 +16,12 @@ never pushed to Vercel; those credentials are managed by the workflow.
 The workflow pins its actions, Vercel CLI, 1Password CLI, and bun versions. It
 drives the Vercel CLI directly: 1Password is the source of truth, so before
 deploying it replaces the Vercel project's env vars for the target environment
-via the Vercel REST API (removes every var scoped solely to that environment,
-then re-adds each `secrets` entry as a sensitive var — except `NEXT_PUBLIC_*`
-keys, added as plain vars so `vercel pull` can supply them to the build; it
-refuses to run if a var also targets another environment or a specific git
-branch), then runs
+through the Vercel REST API. Every var scoped solely to that environment is
+removed, then each `secrets` entry is re-added as a sensitive var;
+`NEXT_PUBLIC_*` keys are added as plain vars instead so `vercel pull` can
+supply them to the build. The sync refuses to run if an existing var also
+targets another environment or a specific git branch, so it never destroys
+config it doesn't own. It then runs
 `vercel pull → vercel build → vercel deploy --prebuilt`
 (`--prod` for production). The deployment URL is exposed as the
 `deployment-url` output. After a successful deploy the workflow creates a
@@ -32,7 +33,10 @@ Secrets are scoped to the steps that need them, never exported to the job
 environment: `vercel build` runs the app's install/build scripts, and those
 must not be able to read `VERCEL_TOKEN` or the GitHub token (checkouts use
 `persist-credentials: false`). The build receives app env vars only through
-`vercel pull`.
+`vercel pull`. Sensitive vars are write-only on Vercel: `vercel pull` yields a
+`[SENSITIVE]` placeholder for them, so apps must read secrets at request time
+(dynamic pages, route handlers). Only `NEXT_PUBLIC_*` values are real at build
+time.
 
 ## Usage
 
