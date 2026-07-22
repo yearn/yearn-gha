@@ -189,11 +189,14 @@ jobs:
           path: .yearn-gha
           persist-credentials: false
 
+      # upload-artifact roots the archive at the paths' common ancestor
+      # (.vercel), so extract back into .vercel to restore output/ and
+      # project.json where the CLI expects them.
       - name: Download prebuilt artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: vercel-prebuilt
-          path: .
+          path: .vercel
 
       - name: Validate deployment inputs
         env:
