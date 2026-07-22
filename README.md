@@ -17,8 +17,10 @@ The workflow pins its actions, Vercel CLI, 1Password CLI, and bun versions. It
 drives the Vercel CLI directly: 1Password is the source of truth, so before
 deploying it replaces the Vercel project's env vars for the target environment
 via the Vercel REST API (removes every var scoped solely to that environment,
-then re-adds each `secrets` entry as a sensitive var; it refuses to run if a
-var also targets another environment or a specific git branch), then runs
+then re-adds each `secrets` entry as a sensitive var — except `NEXT_PUBLIC_*`
+keys, added as plain vars so `vercel pull` can supply them to the build; it
+refuses to run if a var also targets another environment or a specific git
+branch), then runs
 `vercel pull → vercel build → vercel deploy --prebuilt`
 (`--prod` for production). The deployment URL is exposed as the
 `deployment-url` output. After a successful deploy the workflow creates a

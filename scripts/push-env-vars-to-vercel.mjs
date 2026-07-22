@@ -58,10 +58,14 @@ for (const rawLine of opEnv.split("\n")) {
   if (value === undefined) {
     fail(`Secret ${key} was not loaded from 1Password`);
   }
+  // NEXT_PUBLIC_ values are client-public by definition and must be readable
+  // by `vercel pull` so the build can inline them; sensitive vars are
+  // write-only and only reach runtime.
+  const type = key.startsWith("NEXT_PUBLIC_") ? "encrypted" : "sensitive";
   await api(`/v10/projects/${projectId}/env`, {
     method: "POST",
     query: { upsert: "true" },
-    body: { key, value, type: "sensitive", target: [environment] },
+    body: { key, value, type, target: [environment] },
   });
-  console.log(`Added ${key} to ${environment} as sensitive`);
+  console.log(`Added ${key} to ${environment} as ${type}`);
 }
