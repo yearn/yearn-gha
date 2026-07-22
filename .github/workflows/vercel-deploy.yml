@@ -149,18 +149,18 @@ jobs:
         run: node .yearn-gha/scripts/run-vercel-build.mjs
 
       # Only prebuilt output + project link — never env files (may contain
-      # NEXT_PUBLIC values) or anything the deploy job would execute.
+      # NEXT_PUBLIC values) or anything the deploy job would execute. Tar
+      # instead of raw upload: .vercel/output relies on symlinks (traced
+      # node_modules, deduped .func dirs), which zip-based artifact
+      # upload/download destroys.
+      - name: Pack prebuilt output
+        run: tar -czf vercel-prebuilt.tgz .vercel/output .vercel/project.json
+
       - name: Upload prebuilt artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vercel-prebuilt
-          path: |
-            .vercel/output
-            .vercel/project.json
-          # The build output contains dotfiles the deploy needs (e.g.
-          # functions/*.func/.vc-config.json), which upload-artifact skips
-          # by default.
-          include-hidden-files: true
+          path: vercel-prebuilt.tgz
           if-no-files-found: error
           retention-days: 1
 
@@ -193,14 +193,15 @@ jobs:
           path: .yearn-gha
           persist-credentials: false
 
-      # upload-artifact roots the archive at the paths' common ancestor
-      # (.vercel), so extract back into .vercel to restore output/ and
-      # project.json where the CLI expects them.
       - name: Download prebuilt artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: vercel-prebuilt
-          path: .vercel
+          path: .
+
+      # Restores .vercel/output and .vercel/project.json with symlinks intact.
+      - name: Unpack prebuilt output
+        run: tar -xzf vercel-prebuilt.tgz
 
       - name: Validate deployment inputs
         env:
