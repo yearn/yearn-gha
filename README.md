@@ -15,23 +15,28 @@ never pushed to Vercel; those credentials are managed by the workflow.
 
 The workflow pins its actions, Vercel CLI, 1Password CLI, and bun versions. It
 drives the Vercel CLI directly: 1Password is the source of truth, so before
-deploying it replaces the Vercel project's env vars for the target environment
+building it replaces the Vercel project's env vars for the target environment
 through the Vercel REST API. Every var scoped solely to that environment is
 removed, then each `secrets` entry is re-added as a sensitive var;
 `NEXT_PUBLIC_*` keys are added as plain vars instead so `vercel pull` can
 supply them to the build. The sync refuses to run if an existing var also
 targets another environment or a specific git branch, so it never destroys
 config it doesn't own. It then runs
-`vercel pull → vercel build → vercel deploy --prebuilt`
-(`--prod` for production). The deployment URL is exposed as the
-`deployment-url` output. After a successful deploy the workflow creates a
-GitHub Deployment record pointing at the URL, and on `pull_request` events it
-also keeps a single marker-tagged PR comment updated with the latest
+`vercel pull → vercel build` on a build job and `vercel deploy --prebuilt`
+(`--prod` for production) on a separate deploy job. The deployment URL is
+exposed as the `deployment-url` output. After a successful deploy the workflow
+creates a GitHub Deployment record pointing at the URL, and on `pull_request`
+events it also keeps a single marker-tagged PR comment updated with the latest
 deployment URL.
 
-Secrets are scoped to the steps that need them, never exported to the job
-environment: `vercel build` runs the app's install/build scripts, and those
-must not be able to read `VERCEL_TOKEN` or the GitHub token (checkouts use
+Build and deploy run as separate jobs so untrusted app install/build scripts
+cannot poison tools or helpers that later run with `VERCEL_TOKEN` or
+`GITHUB_TOKEN`. The build job uploads only `.vercel/output` and
+`.vercel/project.json` (no env files, no app scripts). The deploy job uses a
+clean runner, reinstalls the Vercel CLI from the registry, re-checkouts helper
+scripts from `yearn/yearn-gha`, and never executes binaries or scripts from the
+build artifact. Within each job, secrets are still scoped to the steps that
+need them (`export-env: false`, no token on the build step, checkouts use
 `persist-credentials: false`). The build receives app env vars only through
 `vercel pull`. Sensitive vars are write-only on Vercel: `vercel pull` yields a
 `[SENSITIVE]` placeholder for them, so apps must read secrets at request time
@@ -55,6 +60,8 @@ permissions:
 
 jobs:
   deploy:
+    # Fork PRs get no secrets and a read-only token; skip instead of failing.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
     with:
       vault: webops-prod-my-app
@@ -69,19 +76,23 @@ jobs:
 When pinning `uses` to a commit sha instead of `main`, pass the same sha as
 `workflows-ref` so the helper scripts are checked out at the matching version.
 
-Deploys are serialized per project and environment by a job-level concurrency
-group inside the workflow (Vercel env vars are shared per project+environment,
-so concurrent runs must not interleave). Callers don't need their own
-`concurrency` block.
+Deploys are serialized per project and environment by a workflow-level
+concurrency group (Vercel env vars are shared per project+environment, so
+concurrent runs must not interleave across build and deploy). Callers don't
+need their own `concurrency` block.
 
 Store `OP_SERVICE_ACCOUNT_TOKEN` as a repository secret on the caller. The
 token must have read-only access only to `webops-prod-shared` and the project
 vault supplied in `vault`.
 
-Caller workflows must grant `deployments: write` (for the GitHub Deployment
-record) and, when triggering on `pull_request`, `pull-requests: write` (for
-the deployment URL comment), in addition to `contents: read`. Reusable
-workflows cannot elevate beyond the caller's token permissions.
+Caller workflows must grant `deployments: write` (GitHub Deployment record)
+and, when triggering on `pull_request`, `pull-requests: write` (deployment URL
+comment), in addition to `contents: read`. The prebuilt artifact upload/download
+uses the runner's internal token, not `GITHUB_TOKEN`, so no `actions` permission
+is needed. Reusable workflows cannot elevate beyond the caller's token
+permissions. When triggering on `pull_request`, gate the job to same-repo PRs
+(see example) — fork PRs get no secrets and a read-only token, so the run would
+fail.
 
 ## Inputs
 

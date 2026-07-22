@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   deploy:
+    # Fork PRs get no secrets and a read-only token; skip instead of failing.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
     with:
       vault: webops-prod-katana-apr-service

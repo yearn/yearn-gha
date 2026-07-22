@@ -31,8 +31,14 @@ async function api(path, init = {}) {
   return response.json();
 }
 
-const comments = await api(`/repos/${repository}/issues/${prNumber}/comments?per_page=100`);
-const existing = comments.find((comment) => comment.body?.startsWith(marker));
+let existing;
+for (let page = 1; ; page++) {
+  const comments = await api(
+    `/repos/${repository}/issues/${prNumber}/comments?per_page=100&page=${page}`,
+  );
+  existing = comments.find((comment) => comment.body?.startsWith(marker));
+  if (existing || comments.length < 100) break;
+}
 if (existing) {
   await api(`/repos/${repository}/issues/comments/${existing.id}`, {
     method: "PATCH",

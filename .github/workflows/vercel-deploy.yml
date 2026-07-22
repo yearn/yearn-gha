@@ -31,19 +31,21 @@ on:
         description: Preview or production URL returned by Vercel.
         value: ${{ jobs.deploy.outputs.deployment-url }}
 
+# Serialize the whole workflow (env sync + build + deploy) per project and
+# environment. Job-level concurrency would release between build and deploy.
+concurrency:
+  group: vercel-deploy-${{ inputs.vault }}-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
-  deploy:
-    name: Deploy to Vercel
+  # Builds untrusted app code. May use VERCEL_TOKEN only in steps that run
+  # before the build. After build, only artifact upload runs — no credentialed
+  # deploy/scripts on this runner (app code could have poisoned the disk).
+  build:
+    name: Build
     runs-on: ubuntu-latest
-    concurrency:
-      group: vercel-deploy-${{ inputs.vault }}-${{ inputs.environment }}
-      cancel-in-progress: false
     permissions:
       contents: read
-      deployments: write
-      pull-requests: write
-    outputs:
-      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
     steps:
       - name: Checkout app repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -142,9 +144,96 @@ jobs:
       # job env, so app env vars come only from the `vercel pull` output above.
       - name: Build
         env:
-          OP_ENV: ${{ inputs.secrets }}
           ENVIRONMENT: ${{ inputs.environment }}
+          OP_ENV: ${{ inputs.secrets }}
         run: node .yearn-gha/scripts/run-vercel-build.mjs
+
+      # Only prebuilt output + project link — never env files (may contain
+      # NEXT_PUBLIC values) or anything the deploy job would execute.
+      - name: Upload prebuilt artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vercel-prebuilt
+          path: |
+            .vercel/output
+            .vercel/project.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # Clean runner. Reinstall tools from the registry and re-checkout helpers —
+  # never execute scripts or binaries produced by the build job.
+  deploy:
+    name: Deploy to Vercel
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+    steps:
+      - name: Set up bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14
+
+      - name: Install Vercel CLI
+        run: bun install -g --ignore-scripts vercel@56.5.0
+
+      - name: Checkout workflow repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: yearn/yearn-gha
+          ref: ${{ inputs.workflows-ref || github.job_workflow_sha }}
+          path: .yearn-gha
+          persist-credentials: false
+
+      - name: Download prebuilt artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: vercel-prebuilt
+          path: .
+
+      - name: Validate deployment inputs
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          VAULT: ${{ inputs.vault }}
+        run: node .yearn-gha/scripts/validate-deployment-inputs.mjs
+
+      # Deploy only needs Vercel credentials (project id + token), not app secrets.
+      - name: Prepare project secret references
+        id: prepare-project-secret-references
+        env:
+          OP_ENV: ""
+          VAULT: ${{ inputs.vault }}
+        run: node .yearn-gha/scripts/prepare-project-secret-references.mjs
+
+      - name: Load secrets from 1Password
+        id: op
+        uses: 1password/load-secrets-action@3a12b0ab99d9cd590a3e9b5a90ea017210ed9556 # v4.0.1
+        with:
+          export-env: false
+          version: 2.30.3
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          VERCEL_TOKEN: op://webops-prod-shared/vercel/VERCEL_TOKEN
+          VERCEL_ORG_ID: op://webops-prod-shared/vercel/VERCEL_ORG_ID
+          VERCEL_PROJECT_ID: ${{ steps.prepare-project-secret-references.outputs.vercel-project-id }}
+
+      - name: Validate Vercel credentials
+        env:
+          VERCEL_TOKEN: ${{ steps.op.outputs.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ steps.op.outputs.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ steps.op.outputs.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          for var in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+            if [[ -z "${!var:-}" ]]; then
+              echo "::error::${var} must resolve from its configured 1Password vault" >&2
+              exit 1
+            fi
+          done
 
       - name: Deploy to Vercel
         id: deploy
