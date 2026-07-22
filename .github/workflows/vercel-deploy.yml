@@ -149,12 +149,12 @@ jobs:
         run: node .yearn-gha/scripts/run-vercel-build.mjs
 
       # Only prebuilt output + project link — never env files (may contain
-      # NEXT_PUBLIC values) or anything the deploy job would execute. Tar
-      # instead of raw upload: .vercel/output relies on symlinks (traced
-      # node_modules, deduped .func dirs), which zip-based artifact
-      # upload/download destroys.
+      # NEXT_PUBLIC values) or anything the deploy job would execute.
+      # -h dereferences the symlinks .vercel/output uses for traced deps —
+      # they point into this runner's node_modules, which the deploy runner
+      # doesn't have, so the tarball must carry the real file contents.
       - name: Pack prebuilt output
-        run: tar -czf vercel-prebuilt.tgz .vercel/output .vercel/project.json
+        run: tar -czhf vercel-prebuilt.tgz .vercel/output .vercel/project.json
 
       - name: Upload prebuilt artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
