@@ -65,6 +65,7 @@ workflows cannot elevate beyond the caller's token permissions.
 | `vault`             | yes      | —         | Project vault named `webops-prod-<project>`; source of the project-specific OP secrets. |
 | `secrets`           | no       | `""`      | Multiline `KEY=item/field` entries resolved from the project vault (or a full `op://...` reference). |
 | `environment`       | no       | `preview` | Deploy target. Only `preview` and `production` are accepted.                |
+| `workflows-ref`     | no       | `""`      | Ref of `yearn/yearn-gha` to check out for helper scripts. Pass the same ref pinned in `uses`; defaults to `github.job_workflow_sha`, which GitHub leaves empty on some runs (falling back to `main`). |
 
 ## Secrets
 

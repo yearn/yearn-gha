@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: preview
+      workflows-ref:
+        description: Ref of yearn/yearn-gha to check out for helper scripts. Pass the same ref pinned in uses; defaults to github.job_workflow_sha, which GitHub leaves empty on some runs (falling back to main).
+        required: false
+        type: string
+        default: ""
     secrets:
       OP_SERVICE_ACCOUNT_TOKEN:
         description: 1Password service account token supplied by the caller and scoped to webops-prod-shared and the project vault named in vault.
@@ -57,7 +62,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: yearn/yearn-gha
-          ref: ${{ github.job_workflow_sha }}
+          ref: ${{ inputs.workflows-ref || github.job_workflow_sha }}
           path: .yearn-gha
 
       - name: Validate deployment inputs
