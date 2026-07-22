@@ -32,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      deployments: write
+      pull-requests: write
     outputs:
       deployment-url: ${{ steps.deploy.outputs.deployment-url }}
     steps:
@@ -115,3 +117,22 @@ jobs:
           vercel build "${prod_flag[@]}" --token="$VERCEL_TOKEN"
           url="$(vercel deploy --prebuilt "${prod_flag[@]}" --token="$VERCEL_TOKEN")"
           echo "deployment-url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub deployment record
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: node .yearn-gha/scripts/create-github-deployment.mjs
+
+      # Keeps a single marker-tagged comment per PR up to date with the
+      # latest deployment URL instead of adding one comment per push.
+      - name: Comment deployment URL on pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: node .yearn-gha/scripts/comment-deployment-url.mjs
