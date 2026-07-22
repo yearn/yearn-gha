@@ -6,16 +6,21 @@ from 1Password by the calling workflow.
 The workflow uses a single caller-provided `OP_SERVICE_ACCOUNT_TOKEN` with
 read-only access to exactly two vaults: `webops-prod-shared` and the project
 vault named in `vault` (`webops-prod-<project>`). `webops-prod-shared` contains
-`VERCEL_TOKEN` and `VERCEL_ORG_ID`; the project vault contains a
-`VERCEL_PROJECT_ID` item and the app secrets listed in `secrets`. Each entry
-in `secrets` is `KEY=item/field`, resolved as `op://<vault>/item/field`
+a `vercel` item with `VERCEL_TOKEN` and `VERCEL_ORG_ID`; the project vault
+contains a `VERCEL_PROJECT_ID` item and the app secrets listed in `secrets`.
+Each entry in `secrets` is `KEY=item/field`, resolved as `op://<vault>/item/field`
 (or pass a full `op://...` reference to point outside the project vault).
 
-The workflow pins its actions, Vercel CLI, 1Password CLI, and bun versions. It uses
-`amondnet/vercel-action` with `vercel-build: true` so the runner runs
-`vercel pull → vercel build → deploy --prebuilt`, inlines project secrets via
-`build-env`, creates GitHub Deployment records, and publishes preview URLs on
-pull requests.
+The workflow pins its actions, Vercel CLI, 1Password CLI, and bun versions. It
+drives the Vercel CLI directly: 1Password is the source of truth, so before
+deploying it replaces the Vercel project's env vars for the target environment
+(removes every existing var, then re-adds each `secrets` entry as a sensitive
+var), then runs `vercel pull → vercel build → vercel deploy --prebuilt`
+(`--prod` for production). The deployment URL is exposed as the
+`deployment-url` output. After a successful deploy the workflow creates a
+GitHub Deployment record pointing at the URL, and on `pull_request` events it
+also keeps a single marker-tagged PR comment updated with the latest
+deployment URL.
 
 ## Usage
 
@@ -48,10 +53,10 @@ Store `OP_SERVICE_ACCOUNT_TOKEN` as a repository secret on the caller. The
 token must have read-only access only to `webops-prod-shared` and the project
 vault supplied in `vault`.
 
-Caller workflows must grant `pull-requests: write` (in addition to
-`contents: read` and `deployments: write`). Reusable workflows cannot elevate
-beyond the caller's token permissions, and preview URL comments on pull
-requests require write access to pull requests.
+Caller workflows must grant `deployments: write` (for the GitHub Deployment
+record) and, when triggering on `pull_request`, `pull-requests: write` (for
+the deployment URL comment), in addition to `contents: read`. Reusable
+workflows cannot elevate beyond the caller's token permissions.
 
 ## Inputs
 
