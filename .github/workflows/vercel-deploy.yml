@@ -157,6 +157,10 @@ jobs:
           path: |
             .vercel/output
             .vercel/project.json
+          # The build output contains dotfiles the deploy needs (e.g.
+          # functions/*.func/.vc-config.json), which upload-artifact skips
+          # by default.
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
