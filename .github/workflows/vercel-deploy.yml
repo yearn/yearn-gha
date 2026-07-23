@@ -4,14 +4,9 @@ on:
   workflow_call:
     inputs:
       project-slug:
-        description: Infisical project slug containing VERCEL_PROJECT_ID under /deploy-config (plus VERCEL_TOKEN and VERCEL_ORG_ID when shared-project-slug is unset).
+        description: Infisical project slug containing VERCEL_PROJECT_ID under /deploy-config.
         required: true
         type: string
-      shared-project-slug:
-        description: Optional Infisical project slug containing VERCEL_TOKEN and VERCEL_ORG_ID under /deploy-config (prod env), shared across apps.
-        required: false
-        type: string
-        default: ''
       identity-id:
         description: Infisical machine identity ID matching the deploy environment (preview identity for pull requests, production identity for the default branch).
         required: true
@@ -25,6 +20,11 @@ on:
       deployment-url:
         description: Preview or production URL returned by Vercel.
         value: ${{ jobs.deploy.outputs.deployment-url }}
+
+env:
+  # Shared Infisical project holding VERCEL_TOKEN and VERCEL_ORG_ID under
+  # /deploy-config (prod env), used by every app deploy.
+  SHARED_PROJECT_SLUG: webops-prod-shared
 
 jobs:
   deploy:
@@ -66,13 +66,12 @@ jobs:
       # onto the runner. App secrets reach Vercel via Infisical secret syncs,
       # never through this workflow.
       - name: Load shared Vercel credentials from Infisical
-        if: inputs.shared-project-slug != ''
         uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
         with:
           method: oidc
           identity-id: ${{ inputs.identity-id }}
           oidc-audience: https://github.com/${{ github.repository_owner }}
-          project-slug: ${{ inputs.shared-project-slug }}
+          project-slug: ${{ env.SHARED_PROJECT_SLUG }}
           env-slug: prod
           secret-path: /deploy-config
           include-imports: false

@@ -10,10 +10,9 @@ project(s), and runs `vercel deploy` — the build happens remotely on Vercel
 with the env vars synced there by Infisical Secret Syncs. App secrets never
 pass through GitHub Actions.
 
-With `shared-project-slug` set, `VERCEL_TOKEN` and `VERCEL_ORG_ID` come from
-that shared project (`prod` env, `/deploy-config`) — one place to rotate them
-across apps — and the app project only holds its `VERCEL_PROJECT_ID`. Without
-it, the app project's `/deploy-config` must contain all three.
+`VERCEL_TOKEN` and `VERCEL_ORG_ID` come from the shared `webops-prod-shared`
+project (`prod` env, `/deploy-config`), defined in the workflow — one place to
+rotate them across apps. The app project only holds its `VERCEL_PROJECT_ID`.
 
 `environment` maps to the Infisical env slug: `preview` → `dev`,
 `production` → `prod`. Production deploys pass `--prod` to the Vercel CLI.
@@ -39,7 +38,6 @@ jobs:
   deploy:
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
     with:
-      shared-project-slug: webops-prod-shared
       project-slug: my-app
       identity-id: 00000000-0000-0000-0000-000000000000
       environment: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
@@ -52,12 +50,11 @@ caller's token permissions.
 
 ## Inputs
 
-| Name                  | Required | Default   | Description                                                                     |
-| --------------------- | -------- | --------- | ------------------------------------------------------------------------------- |
-| `project-slug`        | yes      | —         | Infisical project slug containing `VERCEL_PROJECT_ID` under `/deploy-config` (plus `VERCEL_TOKEN` and `VERCEL_ORG_ID` when `shared-project-slug` is unset). |
-| `shared-project-slug` | no       | `''`      | Infisical project slug containing `VERCEL_TOKEN` and `VERCEL_ORG_ID` under `/deploy-config` (`prod` env), shared across apps. |
-| `identity-id`         | yes      | —         | Infisical machine identity ID (safe to commit; auth comes from OIDC claims).    |
-| `environment`         | no       | `preview` | Deploy target. Only `preview` and `production` are accepted.                    |
+| Name           | Required | Default   | Description                                                                     |
+| -------------- | -------- | --------- | ------------------------------------------------------------------------------- |
+| `project-slug` | yes      | —         | Infisical project slug containing `VERCEL_PROJECT_ID` under `/deploy-config`.   |
+| `identity-id`  | yes      | —         | Infisical machine identity ID (safe to commit; auth comes from OIDC claims).    |
+| `environment`  | no       | `preview` | Deploy target. Only `preview` and `production` are accepted.                    |
 
 ## Outputs
 
@@ -70,13 +67,11 @@ Consume it from a downstream job with
 
 ## Infisical setup
 
-1. Create a shared project with `VERCEL_TOKEN` and `VERCEL_ORG_ID` under
-   `/deploy-config` in the `prod` env, and a project per app with
-   `VERCEL_PROJECT_ID` under `/deploy-config` in each env (`dev` for previews,
-   `prod` for production). Keep ONLY those creds there — the workflow exports
-   every secret at that path onto the runner. (Without a shared project, put
-   all three in the app project's `/deploy-config` and omit
-   `shared-project-slug`.)
+1. Create the shared `webops-prod-shared` project with `VERCEL_TOKEN` and
+   `VERCEL_ORG_ID` under `/deploy-config` in the `prod` env, and a project per
+   app with `VERCEL_PROJECT_ID` under `/deploy-config` in each env (`dev` for
+   previews, `prod` for production). Keep ONLY those creds there — the
+   workflow exports every secret at that path onto the runner.
 2. App secrets live at the project root (`/`) and reach Vercel via a Secret
    Sync per env (`dev` → Vercel Preview, `prod` → Vercel Production), with
    sensitive on. Note: syncing `/` does not include subfolders, which is what
