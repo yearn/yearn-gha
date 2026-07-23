@@ -18,8 +18,11 @@ The deploy environment is derived from the triggering event, not passed by the
 caller: pull requests deploy previews (Infisical env `preview-env-slug`,
 default `dev`), anything else deploys production (Infisical env `env-slug`,
 default `prod`, `--prod` on the Vercel CLI) and is accepted only for a `push`
-to the caller repository's default branch. Fork pull requests are rejected (no
-OIDC token is issued for them).
+to the caller repository's default branch; `workflow_dispatch`, `schedule`, and
+pushes to any other branch are rejected before credentials are loaded. The
+production identity's OIDC subject binding (`ref:refs/heads/main`, see Infisical
+setup) is defense in depth on top of that check. Fork pull requests are rejected
+(no OIDC token is issued for them).
 
 ## Usage
 
