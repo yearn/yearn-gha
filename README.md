@@ -55,12 +55,12 @@ IDs, which are safe to commit).
 
 ## Inputs
 
-| Name           | Required | Default   | Description                                                                     |
-| -------------- | -------- | --------- | ------------------------------------------------------------------------------- |
-| `project-slug`     | yes      | —         | Infisical project slug containing `VERCEL_PROJECT_ID` under `/deploy-config`.   |
-| `identity-id`      | yes      | —         | Infisical machine identity ID for the event-derived deploy environment.         |
-| `preview-env-slug` | no       | `dev`     | Infisical environment slug used for pull request preview deploys.               |
-| `env-slug`         | no       | `prod`    | Infisical environment slug used for production deploys.                         |
+| Name               | Required | Default | Description                                                                   |
+| ------------------ | -------- | ------- | ----------------------------------------------------------------------------- |
+| `project-slug`     | yes      | —       | Infisical project slug containing `VERCEL_PROJECT_ID` under `/deploy-config`. |
+| `identity-id`      | yes      | —       | Infisical machine identity ID for the event-derived deploy environment.       |
+| `preview-env-slug` | no       | `dev`   | Infisical environment slug used for pull request preview deploys.             |
+| `env-slug`         | no       | `prod`  | Infisical environment slug used for production deploys.                       |
 
 ## Outputs
 
