@@ -20,5 +20,4 @@ jobs:
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
     with:
       project-slug: yvusd-apr-service
-      identity-id: 00000000-0000-0000-0000-000000000000
-      environment: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
+      identity-id: ${{ github.event_name == 'pull_request' && vars.INFISICAL_PREVIEW_IDENTITY_ID || vars.INFISICAL_PRODUCTION_IDENTITY_ID }}

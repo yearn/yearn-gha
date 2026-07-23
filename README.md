@@ -14,9 +14,12 @@ pass through GitHub Actions.
 project (`prod` env, `/deploy-config`), defined in the workflow — one place to
 rotate them across apps. The app project only holds its `VERCEL_PROJECT_ID`.
 
-`environment` maps to the Infisical env slug: `preview` → `dev`,
-`production` → `prod`. Production deploys pass `--prod` to the Vercel CLI.
-Fork pull requests are rejected (no OIDC token is issued for them).
+The deploy environment is derived from the triggering event, not passed by the
+caller: pull requests deploy previews (Infisical env `preview-env-slug`,
+default `dev`), anything else deploys production (Infisical env `env-slug`,
+default `prod`, `--prod` on the Vercel CLI) and is accepted only for a `push`
+to the caller repository's default branch. Fork pull requests are rejected (no
+OIDC token is issued for them).
 
 ## Usage
 
@@ -39,22 +42,25 @@ jobs:
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
     with:
       project-slug: my-app
-      identity-id: 00000000-0000-0000-0000-000000000000
-      environment: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
+      identity-id: ${{ github.event_name == 'pull_request' && vars.INFISICAL_PREVIEW_IDENTITY_ID || vars.INFISICAL_PRODUCTION_IDENTITY_ID }}
 ```
 
 Caller workflows must grant `id-token: write` (OIDC login to Infisical) and
 `pull-requests: write` (preview URL comments), in addition to `contents: read`
 and `deployments: write`. Reusable workflows cannot elevate beyond the
-caller's token permissions.
+caller's token permissions. Configure `INFISICAL_PREVIEW_IDENTITY_ID` and
+`INFISICAL_PRODUCTION_IDENTITY_ID` as Actions repository variables in each
+caller (or replace the variable references with the corresponding identity
+IDs, which are safe to commit).
 
 ## Inputs
 
 | Name           | Required | Default   | Description                                                                     |
 | -------------- | -------- | --------- | ------------------------------------------------------------------------------- |
-| `project-slug` | yes      | —         | Infisical project slug containing `VERCEL_PROJECT_ID` under `/deploy-config`.   |
-| `identity-id`  | yes      | —         | Infisical machine identity ID (safe to commit; auth comes from OIDC claims).    |
-| `environment`  | no       | `preview` | Deploy target. Only `preview` and `production` are accepted.                    |
+| `project-slug`     | yes      | —         | Infisical project slug containing `VERCEL_PROJECT_ID` under `/deploy-config`.   |
+| `identity-id`      | yes      | —         | Infisical machine identity ID for the event-derived deploy environment.         |
+| `preview-env-slug` | no       | `dev`     | Infisical environment slug used for pull request preview deploys.               |
+| `env-slug`         | no       | `prod`    | Infisical environment slug used for production deploys.                         |
 
 ## Outputs
 
@@ -76,14 +82,19 @@ Consume it from a downstream job with
    Sync per env (`dev` → Vercel Preview, `prod` → Vercel Production), with
    sensitive on. Note: syncing `/` does not include subfolders, which is what
    keeps `/deploy-config` out of the app env.
-3. Create a machine identity with OIDC Auth:
-   - Discovery/issuer URL: `https://token.actions.githubusercontent.com`
-   - Audience: `https://github.com/<org>`
-   - Subject: `repo:<org>/<repo>:pull_request` (previews) or
-     `repo:<org>/<repo>:ref:refs/heads/main` (production)
-   - Grant it read access to `/deploy-config` only, on both the shared and
-     the app project.
-4. Pass the identity's ID as `identity-id` in the caller.
+3. Create separate preview and production machine identities with OIDC Auth.
+   Both use discovery/issuer URL
+   `https://token.actions.githubusercontent.com` and audience
+   `https://github.com/<org>`.
+   - Preview identity subject: `repo:<org>/<repo>:pull_request`. Grant it read
+     access to `/deploy-config` only in the shared project's `prod` env and
+     the app project's `dev` env.
+   - Production identity subject:
+     `repo:<org>/<repo>:ref:refs/heads/main` (replace `main` if the default
+     branch differs). Grant it read access to `/deploy-config` only in the
+     shared project's `prod` env and the app project's `prod` env.
+4. Pass the event-appropriate identity ID as `identity-id` in the caller, as
+   shown above.
 
 ## Migration from Vercel-managed env vars
 
