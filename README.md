@@ -6,9 +6,14 @@ resolved from Infisical via OIDC. No static secrets live in GitHub.
 The workflow authenticates to Infisical as a machine identity using the GitHub
 Actions OIDC token, fetches `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
 `VERCEL_PROJECT_ID` from the `/deploy-config` folder of the given Infisical
-project, and runs `vercel deploy` — the build happens remotely on Vercel with
-the env vars synced there by Infisical Secret Syncs. App secrets never pass
-through GitHub Actions.
+project(s), and runs `vercel deploy` — the build happens remotely on Vercel
+with the env vars synced there by Infisical Secret Syncs. App secrets never
+pass through GitHub Actions.
+
+With `shared-project-slug` set, `VERCEL_TOKEN` and `VERCEL_ORG_ID` come from
+that shared project (`prod` env, `/deploy-config`) — one place to rotate them
+across apps — and the app project only holds its `VERCEL_PROJECT_ID`. Without
+it, the app project's `/deploy-config` must contain all three.
 
 `environment` maps to the Infisical env slug: `preview` → `dev`,
 `production` → `prod`. Production deploys pass `--prod` to the Vercel CLI.
@@ -34,6 +39,7 @@ jobs:
   deploy:
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
     with:
+      shared-project-slug: webops-prod-shared
       project-slug: my-app
       identity-id: 00000000-0000-0000-0000-000000000000
       environment: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
@@ -46,11 +52,12 @@ caller's token permissions.
 
 ## Inputs
 
-| Name           | Required | Default   | Description                                                                     |
-| -------------- | -------- | --------- | ------------------------------------------------------------------------------- |
-| `project-slug` | yes      | —         | Infisical project slug containing `VERCEL_TOKEN`, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID` under `/deploy-config`. |
-| `identity-id`  | yes      | —         | Infisical machine identity ID (safe to commit; auth comes from OIDC claims).    |
-| `environment`  | no       | `preview` | Deploy target. Only `preview` and `production` are accepted.                    |
+| Name                  | Required | Default   | Description                                                                     |
+| --------------------- | -------- | --------- | ------------------------------------------------------------------------------- |
+| `project-slug`        | yes      | —         | Infisical project slug containing `VERCEL_PROJECT_ID` under `/deploy-config` (plus `VERCEL_TOKEN` and `VERCEL_ORG_ID` when `shared-project-slug` is unset). |
+| `shared-project-slug` | no       | `''`      | Infisical project slug containing `VERCEL_TOKEN` and `VERCEL_ORG_ID` under `/deploy-config` (`prod` env), shared across apps. |
+| `identity-id`         | yes      | —         | Infisical machine identity ID (safe to commit; auth comes from OIDC claims).    |
+| `environment`         | no       | `preview` | Deploy target. Only `preview` and `production` are accepted.                    |
 
 ## Outputs
 
@@ -63,10 +70,13 @@ Consume it from a downstream job with
 
 ## Infisical setup
 
-1. Create a project per app. Put `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
-   `VERCEL_PROJECT_ID` under the `/deploy-config` folder in each env
-   (`dev` for previews, `prod` for production). Keep ONLY those three there —
-   the workflow exports every secret at that path onto the runner.
+1. Create a shared project with `VERCEL_TOKEN` and `VERCEL_ORG_ID` under
+   `/deploy-config` in the `prod` env, and a project per app with
+   `VERCEL_PROJECT_ID` under `/deploy-config` in each env (`dev` for previews,
+   `prod` for production). Keep ONLY those creds there — the workflow exports
+   every secret at that path onto the runner. (Without a shared project, put
+   all three in the app project's `/deploy-config` and omit
+   `shared-project-slug`.)
 2. App secrets live at the project root (`/`) and reach Vercel via a Secret
    Sync per env (`dev` → Vercel Preview, `prod` → Vercel Production), with
    sensitive on. Note: syncing `/` does not include subfolders, which is what
@@ -76,7 +86,8 @@ Consume it from a downstream job with
    - Audience: `https://github.com/<org>`
    - Subject: `repo:<org>/<repo>:pull_request` (previews) or
      `repo:<org>/<repo>:ref:refs/heads/main` (production)
-   - Grant it read access to `/deploy-config` only.
+   - Grant it read access to `/deploy-config` only, on both the shared and
+     the app project.
 4. Pass the identity's ID as `identity-id` in the caller.
 
 ## Migration from Vercel-managed env vars

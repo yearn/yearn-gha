@@ -19,6 +19,7 @@ jobs:
   deploy:
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
     with:
+      shared-project-slug: webops-prod-shared
       project-slug: fapy-hook
       identity-id: 00000000-0000-0000-0000-000000000000
       environment: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
