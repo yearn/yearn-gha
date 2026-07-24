@@ -34,7 +34,6 @@ env:
   # branch) deploys production.
   DEPLOY_ENV: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
   INFISICAL_ENV_SLUG: ${{ github.event_name == 'pull_request' && inputs.preview-env-slug || inputs.env-slug }}
-  SHARED_IDENTITY_ID: ${{ secrets.SHARED_IDENTITY_ID }}
 
 jobs:
   deploy:
@@ -82,7 +81,7 @@ jobs:
         with:
           method: oidc
           # Org-wide identity scoped to webops-prod-shared /deploy-config only.
-          identity-id: ${{ env.SHARED_IDENTITY_ID }}
+          identity-id: 4ce71a53-d6fc-429a-9a39-10c8a91bc86d
           oidc-audience: https://github.com/${{ github.repository_owner }}
           project-slug: ${{ env.SHARED_PROJECT_SLUG }}
           env-slug: prod
