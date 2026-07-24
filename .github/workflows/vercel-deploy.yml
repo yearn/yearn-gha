@@ -7,6 +7,10 @@ on:
         description: Infisical project slug containing VERCEL_PROJECT_ID under /deploy-config.
         required: true
         type: string
+      shared-identity-id:
+        description: Infisical machine identity ID matching the shared project.
+        required: true
+        type: string
       identity-id:
         description: Infisical machine identity ID matching the deploy environment (preview identity for pull requests, production identity for the default branch).
         required: true
@@ -81,7 +85,7 @@ jobs:
         with:
           method: oidc
           # Org-wide identity scoped to webops-prod-shared /deploy-config only.
-          identity-id: 4ce71a53-d6fc-429a-9a39-10c8a91bc86d
+          identity-id: ${{ inputs.shared-identity-id }}
           oidc-audience: https://github.com/${{ github.repository_owner }}
           project-slug: ${{ env.SHARED_PROJECT_SLUG }}
           env-slug: prod
