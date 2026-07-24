@@ -61,7 +61,7 @@ IDs, which are safe to commit).
 | Name               | Required | Default | Description                                                                   |
 | ------------------ | -------- | ------- | ----------------------------------------------------------------------------- |
 | `project-slug`     | yes      | —       | Infisical project slug containing `VERCEL_PROJECT_ID` under `/deploy-config`. |
-| `identity-id`      | yes      | —       | Infisical machine identity ID for the event-derived deploy environment.       |
+| `identity-id`      | yes      | —       | Infisical machine identity for the event-derived env; loads shared + app `/deploy-config`. |
 | `preview-env-slug` | no       | `dev`   | Infisical environment slug used for pull request preview deploys.             |
 | `env-slug`         | no       | `prod`  | Infisical environment slug used for production deploys.                       |
 
@@ -97,7 +97,8 @@ Consume it from a downstream job with
      branch differs). Grant it read access to `/deploy-config` only in the
      shared project's `prod` env and the app project's `prod` env.
 4. Pass the event-appropriate identity ID as `identity-id` in the caller, as
-   shown above.
+   shown above. The same identity authenticates both the shared
+   (`webops-prod-shared`) and app project fetches.
 
 ## Migration from Vercel-managed env vars
 
