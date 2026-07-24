@@ -3,11 +3,11 @@ name: Deploy to Vercel
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [master]
 
 concurrency:
-  group: vercel-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'production' }}
-  cancel-in-progress: false
+  group: vercel-deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
