@@ -73,6 +73,7 @@ jobs:
           identity-id: ${{ inputs.identity-id }}
           oidc-audience: https://github.com/${{ github.repository_owner }}
           project-slug: ${{ env.SHARED_PROJECT_SLUG }}
+          # pinned to prod because these credentials are envieronment agnostic
           env-slug: prod
           secret-path: /deploy-config
           include-imports: false
@@ -85,6 +86,7 @@ jobs:
           identity-id: ${{ inputs.identity-id }}
           oidc-audience: https://github.com/${{ github.repository_owner }}
           project-slug: ${{ inputs.project-slug }}
+          # This is also "env" agnostic - it's the same for prod and preview
           env-slug: prod
           secret-path: /deploy-config
           include-imports: false

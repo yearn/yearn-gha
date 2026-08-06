@@ -46,7 +46,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@10bc1be9dad5562ab7a91ab19285dd89cf938fc0 # pin to the approved full commit SHA
+    uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@<approved-sha> # pin to the approved full commit SHA
     with:
       project-slug: my-app
       identity-id: ${{ github.event_name == 'pull_request' && vars.INFISICAL_PREVIEW_IDENTITY_ID || vars.INFISICAL_PRODUCTION_IDENTITY_ID }}
@@ -110,9 +110,12 @@ Consume it from a downstream job with
 
 ## Migration from Vercel-managed env vars
 
-Set the first sync to import from destination (Infisical wins on conflicts) —
-never overwrite on first sync — and diff Vercel vs Infisical before trusting
-auto-sync. Sensitive Vercel values are not readable via API; re-enter them in
-Infisical manually.
+- set vercel integration
+ - setup with Initial Sync Behavior -> Overwrite Destination Secrets
+- Gather credentials 
+- Add them to infisical
+- queue sync
+
+If necessary, do the same steps as above for the preview envieronment.
 
 See `examples/` for the current Katana APR, yvUSD APR, and fapy-hook shapes.
