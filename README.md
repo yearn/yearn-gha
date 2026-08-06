@@ -15,9 +15,9 @@ project (`prod` env, `/deploy-config`), defined in the workflow — one place to
 rotate them across apps. The app project only holds its `VERCEL_PROJECT_ID`.
 
 The deploy environment is derived from the triggering event, not passed by the
-caller: pull requests deploy previews (Infisical env `preview-env-slug`,
-default `dev`), anything else deploys production (Infisical env `env-slug`,
-default `prod`, `--prod` on the Vercel CLI) and is accepted only for a `push`
+caller: pull requests deploy previews (Infisical env `dev`), anything else
+deploys production (Infisical env `prod`, `--prod` on the Vercel CLI) and is
+accepted only for a `push`
 to the caller repository's default branch; `workflow_dispatch`, `schedule`, and
 pushes to any other branch are rejected before credentials are loaded. The
 production identity's OIDC subject binding (`ref:refs/heads/main`, see Infisical
@@ -34,6 +34,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: vercel-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   deployments: write
@@ -42,7 +46,7 @@ permissions:
 
 jobs:
   deploy:
-    uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@main
+    uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@10bc1be9dad5562ab7a91ab19285dd89cf938fc0 # pin to the approved full commit SHA
     with:
       project-slug: my-app
       identity-id: ${{ github.event_name == 'pull_request' && vars.INFISICAL_PREVIEW_IDENTITY_ID || vars.INFISICAL_PRODUCTION_IDENTITY_ID }}
@@ -62,8 +66,6 @@ IDs, which are safe to commit).
 | ------------------ | -------- | ------- | ----------------------------------------------------------------------------- |
 | `project-slug`     | yes      | —       | Infisical project slug containing `VERCEL_PROJECT_ID` under `/deploy-config`. |
 | `identity-id`      | yes      | —       | Infisical machine identity for the event-derived env; loads shared + app `/deploy-config`. |
-| `preview-env-slug` | no       | `dev`   | Infisical environment slug used for pull request preview deploys.             |
-| `env-slug`         | no       | `prod`  | Infisical environment slug used for production deploys.                       |
 
 ## Outputs
 
@@ -89,13 +91,19 @@ Consume it from a downstream job with
    Both use discovery/issuer URL
    `https://token.actions.githubusercontent.com` and audience
    `https://github.com/<org>`.
-   - Preview identity subject: `repo:<org>/<repo>:pull_request`. Grant it read
-     access to `/deploy-config` only in the shared project's `prod` env and
-     the app project's `dev` env.
+   - Preview identity subject: `repo:<org>/<repo>:pull_request`. Add claims
+     `job_workflow_ref: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@<approved-sha>`
+     and `event_name: pull_request`. Grant it read access to `/deploy-config`
+     only in the shared project's `prod` env and the app project's `dev` env.
    - Production identity subject:
      `repo:<org>/<repo>:ref:refs/heads/main` (replace `main` if the default
-     branch differs). Grant it read access to `/deploy-config` only in the
-     shared project's `prod` env and the app project's `prod` env.
+     branch differs). Add claims
+     `job_workflow_ref: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@<approved-sha>`,
+     `event_name: push`, and `ref: refs/heads/<default-branch>`. Grant it read
+     access to `/deploy-config` only in the shared project's `prod` env and
+     the app project's `prod` env.
+   - Set a short access-token TTL and a bounded max uses on both identities'
+     auth method — deploys are short-lived, so tokens do not need to outlive them.
 4. Pass the event-appropriate identity ID as `identity-id` in the caller, as
    shown above. The same identity authenticates both the shared
    (`webops-prod-shared`) and app project fetches.
