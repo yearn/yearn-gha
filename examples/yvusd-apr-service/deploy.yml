@@ -21,3 +21,5 @@ jobs:
     with:
       project-slug: yvusd-apr-service
       identity-id: ${{ github.event_name == 'pull_request' && vars.INFISICAL_PREVIEW_IDENTITY_ID || vars.INFISICAL_PRODUCTION_IDENTITY_ID }}
+      # Optional for apps with separate preview/production deploy config:
+      # split-app-env: true
