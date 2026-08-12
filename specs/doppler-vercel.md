@@ -265,15 +265,6 @@ If production uses a GitHub Environment with required reviewers, update the OIDC
 
 The API cannot reveal sensitive Vercel values. Migration therefore requires a trusted source or manual re-entry; an API-only comparison is incomplete.
 
-## Routine operations
-
-- **Rotate an application secret:** update Doppler `prd` or `preview`, wait for the Vercel integration to succeed, then redeploy. Vercel environment-variable changes apply to new deployments, not deployments already built.
-- **Rotate the shared deployment token:** perform the planned quarterly rotation, or rotate immediately after suspected exposure or a change of token owner. Create a replacement team-scoped token, update `webops-shared-prod` / `deploy-configs`, verify preview and production deployments across the fleet, then revoke the old token. Do not leave overlapping tokens active longer than the coordinated verification window.
-- **Update the central workflow:** make a reviewed change, pin the new full SHA in every caller, and update the Doppler `job_workflow_ref` conditions in the same coordinated rollout.
-- **Respond to a leaked preview application secret:** disable the affected integration or secret, rotate it at the upstream system, update Doppler, and redeploy affected previews.
-- **Respond to a leaked Vercel token:** treat it as a fleet-wide incident. Stop deployments, revoke the shared token immediately, create a replacement, update `webops-shared-prod` / `deploy-configs`, verify affected applications, and inspect Vercel, GitHub, and Doppler audit logs.
-- **Respond to a central-workflow compromise:** stop deployments, revoke the shared Vercel token, disable relevant Doppler identities, inspect workflow runs and audit logs, restore a reviewed workflow SHA, and issue a replacement token before resuming deployments.
-
 ## Rollback
 
 If the new path fails during migration:
