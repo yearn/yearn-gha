@@ -250,20 +250,11 @@ If production uses a GitHub Environment with required reviewers, update the OIDC
 
 ## Migration runbook
 
-1. Inventory the Vercel project, environments, custom environments, domains, build settings, existing Git integration, and all environment-variable keys.
-2. For a new Vercel project, perform the intentional first Production deployment before allowing preview runs.
-3. Create or identify the shared team-scoped Vercel token. Put `VERCEL_TOKEN` and `VERCEL_ORG_ID` once in `webops-shared-prod` / `deploy-configs`; put only `VERCEL_PROJECT_ID` in the application project’s `deploy-configs`. Record the rotation owner and schedule the first quarterly rotation.
-4. Create preview and production Doppler service-account identities. Capture the repository’s actual OIDC claims and configure exact subject, audience, event, ref, and `job_workflow_ref` conditions (full SHA of the approved reusable workflow). Grant access only to the shared and app `deploy-configs` configs.
-5. Create Doppler Vercel integrations with care during migration (`preview` → Preview, `prd` → Production). Do not attach `deploy-configs`.
-6. For an existing Vercel environment, import or re-enter values so Doppler matches the live Vercel key set. Vercel does not expose sensitive values back through its API; imported sensitive keys may be empty. Re-enter those values in Doppler before relying on the sync. Do not treat an API-only comparison as complete.
-7. Enable one integration at a time. Verify its exact Vercel target (Preview or Production), key set, values, and Sensitive badge. Then leave auto-sync on. Enable deletion of destination keys only if Doppler is intended to own the entire destination key set.
-8. Add the caller workflow and identity-ID repository variables. Pin the reusable workflow to a full commit SHA and configure the matching OIDC claim conditions on both identities.
-9. Test a same-repository pull request with preview-safe secrets. Confirm that a fork PR, `workflow_dispatch`, and other unsupported events fail before authentication.
-10. Test a protected default-branch deployment and verify the production URL, deployment record, environment, and domains.
-11. Disconnect the Vercel Git integration. Confirm that a new push creates only one deployment.
-12. Remove obsolete Vercel environment-variable editing access and revoke the previous deployment credential (for example the old Infisical machine identity or 1Password service-account token).
-
-The API cannot reveal sensitive Vercel values. Migration therefore requires a trusted source or manual re-entry; an API-only comparison is incomplete.
+1. Put `VERCEL_TOKEN` and `VERCEL_ORG_ID` in `webops-shared-prod` / `deploy-configs`. Put `VERCEL_PROJECT_ID` in the app project’s `deploy-configs`.
+2. Create preview and production Doppler identities. Bind subject, audience, `event_name`, `ref`, and `job_workflow_ref` to the pinned workflow SHA. Grant read only on shared + app `deploy-configs`.
+3. Sync Doppler `preview` → Vercel Preview and `prd` → Vercel Production. Do not attach `deploy-configs`. Re-enter any empty sensitive values; Vercel does not export them.
+4. Add the caller workflow, pin the reusable SHA, set `DOPPLER_*_IDENTITY_ID` vars, and match the identity claims to that SHA.
+5. Confirm a same-repo PR deploys preview. Then disconnect the Vercel Git integration so only this workflow deploys.
 
 ## Rollback
 
