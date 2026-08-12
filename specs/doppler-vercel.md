@@ -8,7 +8,7 @@
 
 GitHub Actions initiates Vercel deployments. GitHub Actions authenticates to Doppler with OIDC, so GitHub stores no long-lived Doppler credential. Doppler Vercel integrations send application secrets directly to Vercel; application secrets are not loaded onto the GitHub runner.
 
-The fleet uses one **shared team-scoped Vercel access token**, as required by the current Vercel plan. Store `VERCEL_TOKEN` and `VERCEL_ORG_ID` once in the shared `webops-shared-prod` Doppler project; each application project stores only its own `VERCEL_PROJECT_ID`. The reusable workflow hardcodes `SHARED_PROJECT: webops-shared-prod` and `SHARED_CONFIG: deploy-configs` (`.github/workflows/vercel-deploy.yml:22-23`) — callers do not pass them. This is an explicit residual risk: a leaked token may affect every Vercel project the token can access. Rotate the shared token quarterly, and immediately after a suspected exposure or change of the token owner; record the rotation owner and the next rotation date.
+The fleet uses one **shared team-scoped Vercel access token**. There is no per-project token. Store `VERCEL_TOKEN` and `VERCEL_ORG_ID` once in `webops-shared-prod` / `deploy-configs`; each application project stores only its own `VERCEL_PROJECT_ID`. The reusable workflow hardcodes `SHARED_PROJECT: webops-shared-prod` and `SHARED_CONFIG: deploy-configs` (`.github/workflows/vercel-deploy.yml:22-23`) — callers do not pass them. A leaked token can reach every Vercel project the team token can access.
 
 The guide distinguishes three kinds of data:
 
@@ -56,7 +56,7 @@ This design provides the following controls:
 This design does **not** eliminate these risks:
 
 - `VERCEL_TOKEN` is still a long-lived credential exposed to the deployment action and Vercel CLI on the GitHub runner. OIDC removes the static **Doppler** credential; it does not make the Vercel token ephemeral.
-- Because the Vercel token is shared, its compromise is a fleet-wide incident affecting every project it can access. Rotate it quarterly through a centrally coordinated runbook, and do not copy it outside `webops-shared-prod` / `deploy-configs`.
+- Because the Vercel token is one team token, its compromise is a fleet-wide incident. Do not copy it outside `webops-shared-prod` / `deploy-configs`.
 - Preview application secrets are available to the Vercel build. Code in a same-repository pull request can try to exfiltrate them during its build. The initial preview and production configs may contain the same non-sensitive, revocable values, but preview must never receive customer data, privileged credentials, or a value that cannot safely be rotated. The Vercel “sensitive” flag hides values in management surfaces; it does not make them unavailable to application or build code.
 - A compromised approved central-workflow SHA can affect callers that have been deliberately updated to it. Full-SHA caller pins prevent a later change to a branch or tag from silently changing deployed workflow code.
 - GitHub is the automated deployment gate, but Vercel still authorizes the access token and existing Vercel members may be able to deploy manually. Remove unnecessary Vercel memberships and use the narrowest Vercel roles available.
@@ -241,12 +241,9 @@ If production uses a GitHub Environment with required reviewers, update the OIDC
 
 ## Vercel controls
 
-- Use the team-scoped token supported by the current Vercel plan and set an expiration where supported.
-- Record the token owner, expiry, creation date, rotation owner, and next quarterly rotation date. Vercel access tokens are personal credentials; use a dedicated automation identity if the plan and operating model support one.
-- Store the token only in `webops-shared-prod` / `deploy-configs`. Treat access to that Doppler config as fleet-wide deployment access and review it regularly.
-- Keep only the minimum necessary Vercel team membership. GitHub-triggered deployments do not prevent authorized Vercel users from deploying manually.
-- Disconnect the Vercel Git integration only after a successful production deployment through the new path. Confirm that domains, deployment protection, and environment-variable targeting still behave as expected.
-- A new Vercel project’s **first deployment is always Production**, even without `--prod`. For a new project, perform and verify an intentional production bootstrap deployment before enabling pull-request previews.
+- One team-scoped Vercel token for the whole fleet. There is no per-project token. Store it (with `VERCEL_ORG_ID`) only in `webops-shared-prod` / `deploy-configs`. A leak is fleet-wide.
+- Disconnect the Vercel Git integration after this workflow has deployed successfully, so a push does not create two deployments.
+- A new Vercel project’s first deployment is always Production, even without `--prod`.
 
 ## Migration runbook
 
