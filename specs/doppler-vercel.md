@@ -253,16 +253,6 @@ If production uses a GitHub Environment with required reviewers, update the OIDC
 4. Add the caller workflow, pin the reusable SHA, set `DOPPLER_*_IDENTITY_ID` vars, and match the identity claims to that SHA.
 5. Confirm a same-repo PR deploys preview. Then disconnect the Vercel Git integration so only this workflow deploys.
 
-## Rollback
-
-If the new path fails during migration:
-
-1. Disable the caller workflow.
-2. Disable or pause Doppler Vercel integrations before editing Vercel values manually.
-3. Restore the previous Vercel environment configuration from the inventory and trusted secret source.
-4. Reconnect the Vercel Git integration only if the previous deployment path is intentionally restored.
-5. Disable the application’s Doppler identities. Revoke the shared Vercel token only if it may have been exposed or the rollback is fleet-wide; otherwise revocation would interrupt unrelated applications.
-
 ## References
 
 - [TanStack incident postmortem](https://tanstack.com/blog/npm-supply-chain-compromise-postmortem)
