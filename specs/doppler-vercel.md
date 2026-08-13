@@ -1,14 +1,14 @@
 # Vercel Deployment Operating Guide (Doppler)
 
 - **Date:** 2026-08-12
-- **Status:** Implemented in `yearn/yearn-gha` (`feat/move-to-doppler`). Complete the per-app migration runbook before cutting a project over.
-- **Context:** This guide follows the TanStack npm supply-chain compromise of May 2026 and replaces the Infisical design. It matches the reusable workflow in `.github/workflows/vercel-deploy.yml` on this branch. The README and `examples/*` still describe Infisical; treat this spec as the source of truth until those are updated.
+- **Status:** Implemented in `yearn/yearn-gha`. Complete the per-app migration runbook before cutting a project over.
+- **Context:** This guide follows the TanStack npm supply-chain compromise of May 2026 and replaces the Infisical design. It matches the reusable workflow in `.github/workflows/vercel-deploy.yml`.
 
 ## Decision
 
 GitHub Actions initiates Vercel deployments. GitHub Actions authenticates to Doppler with OIDC, so GitHub stores no long-lived Doppler credential. Doppler Vercel integrations send application secrets directly to Vercel; application secrets are not loaded onto the GitHub runner.
 
-The fleet uses one **shared team-scoped Vercel access token**. There is no per-project token. Store `VERCEL_TOKEN` and `VERCEL_ORG_ID` once in `webops-shared-prod` / `deploy-configs`; each application project stores only its own `VERCEL_PROJECT_ID`. The reusable workflow hardcodes `SHARED_PROJECT: webops-shared-prod` and `SHARED_CONFIG: deploy-configs` (`.github/workflows/vercel-deploy.yml:22-23`) — callers do not pass them. A leaked token can reach every Vercel project the team token can access.
+The fleet uses one **shared team-scoped Vercel access token**. There is no per-project token. Store `VERCEL_TOKEN` and `VERCEL_ORG_ID` once in `webops-shared-prod` / `deploy-configs`; each application project stores only its own `VERCEL_PROJECT_ID`. The reusable workflow hardcodes `SHARED_PROJECT: webops-shared-prod` and `DEPLOY_CONFIG: deploy-configs` (`.github/workflows/vercel-deploy.yml:22-24`) — callers do not pass them. A leaked token can reach every Vercel project the team token can access.
 
 The guide distinguishes three kinds of data:
 
@@ -16,13 +16,13 @@ The guide distinguishes three kinds of data:
 - **Deployment identifiers:** `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`. These select the Vercel team and project; they are configuration identifiers, not authentication credentials.
 - **Application secrets:** database URLs, RPC credentials, API tokens, signing keys, and similar values used by the application.
 
-Keep deployment data in a sibling Doppler environment/config named `deploy-configs`. Keep application secrets in `prd` (Production) and `preview`. Never put application secrets in `deploy-configs` because `dopplerhq/secrets-fetch-action` with `inject-env-vars: true` exports every value in that config to the GitHub runner (`.github/workflows/vercel-deploy.yml:65-89`).
+Keep deployment data in a sibling Doppler environment/config named `deploy-configs`. Keep application secrets in `prd` (Production) and `preview`. Never put application secrets in `deploy-configs` because `dopplerhq/secrets-fetch-action` with `inject-env-vars: true` exports every value in that config to the GitHub runner (`.github/workflows/vercel-deploy.yml:66-90`).
 
 Doppler has no Infisical-style folder-in-env. Isolation is a separate config, not a path under `prd` or `preview`.
 
 ## Implementation status (yearn-gha)
 
-The reusable workflow on this branch already implements the core design:
+The reusable workflow already implements the core design:
 
 | Control | Status |
 | ------- | ------ |
@@ -34,11 +34,11 @@ The reusable workflow on this branch already implements the core design:
 | Reject `workflow_dispatch`, `schedule`, and non-default-branch pushes before Doppler auth | Done |
 | Validate `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` before deploy | Done |
 | SHA-pinned third-party actions + Vercel CLI `55.0.0` | Done |
-| Caller examples pin reusable workflow to full commit SHA | Documented (`@<approved-sha>`); examples still Infisical-shaped |
+| Caller examples pin reusable workflow to full commit SHA | Done (examples use the `@<approved-sha>` placeholder; replace at rollout) |
 | Exact `job_workflow_ref` on Doppler OIDC identities | Documented; configure per identity at rollout |
 | `split-app-env` / event-specific deploy-config fetch | **Rejected.** One `deploy-configs` for preview and production. |
 
-Remaining work is **operational**: Doppler projects/identities/Vercel integrations per app, repository variables, coordinated SHA pin + claim updates, branch protection, cutover, and README/example rewrite.
+Remaining work is **operational**: Doppler projects/identities/Vercel integrations per app, repository variables, coordinated SHA pin + claim updates, branch protection, and cutover.
 
 ## What this design protects—and what it does not
 
@@ -136,7 +136,7 @@ Service Account Identities require a Doppler Team or Enterprise workplace.
 Create or retain the `webops-shared-prod` Doppler project:
 
 - Environment / config `deploy-configs`
-  - `VERCEL_TOKEN`: the shared team-scoped Vercel token used by every application deployment.
+  - `VERCEL_TOKEN`: the shared team-scoped Vercel token used by every application deployment. Set its Doppler visibility to **Masked**. The fetch action registers GitHub log redaction only for values that are not Unmasked. An Unmasked token shows in plaintext if it reaches a log.
   - `VERCEL_ORG_ID`
 
 Keep the shared token only in this project and config. Do not copy it into application projects. Grant each application’s preview and production identities read access only to this exact project and config.
@@ -179,7 +179,7 @@ Create two Doppler service-account identities per application repository: previe
 
 Do not grant the deploy service account access to `prd` or `preview`.
 
-The official fetch action authenticates with `core.getIDToken()` and no custom audience (`.github/workflows/vercel-deploy.yml:70-77`). Configure each identity so audience and subject match the token GitHub actually issues. Confirm against a real token from a test run; do not assume a Doppler UI preset without checking. GitHub’s default audience is typically `https://github.com/<org>`.
+The official fetch action authenticates with `core.getIDToken()` and no custom audience (`.github/workflows/vercel-deploy.yml:71-78`). Configure each identity so audience and subject match the token GitHub actually issues. Confirm against a real token from a test run; do not assume a Doppler UI preset without checking. GitHub’s default audience is typically `https://github.com/<org>`.
 
 Both identities use:
 
@@ -208,7 +208,7 @@ Access grants:
 | Preview (`pull_request`) | `webops-shared-prod` / `deploy-configs` | `<app>` / `deploy-configs` |
 | Production (`push`) | `webops-shared-prod` / `deploy-configs` | `<app>` / `deploy-configs` |
 
-The production identity’s OIDC subject binding (`ref:refs/heads/<default-branch>`) is defense in depth on top of the workflow’s own default-branch check (`.github/workflows/vercel-deploy.yml:51-60`).
+The production identity’s OIDC subject binding (`ref:refs/heads/<default-branch>`) is defense in depth on top of the workflow’s own default-branch check (`.github/workflows/vercel-deploy.yml:52-61`).
 
 Identity IDs are not secrets and may be stored as repository variables or committed. The configured subject, audience, claims, and service-account project/config role are the authorization controls. The same identity authenticates both the shared and app fetches — do not introduce a separate shared-only identity unless the design is deliberately revised.
 

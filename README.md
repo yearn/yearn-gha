@@ -88,6 +88,9 @@ Consume it from a downstream job with
    `VERCEL_PROJECT_ID` in `deploy-configs`.
    Keep ONLY those creds in `deploy-configs` — the workflow exports every
    secret in that config onto the runner.
+   Set `VERCEL_TOKEN` visibility to Masked. The fetch action registers
+   GitHub log redaction only for values that are not Unmasked; an Unmasked
+   token shows in plaintext if it reaches a log.
 2. App secrets live in `prd` and `preview` and reach Vercel via one
    integration per env (`preview` → Vercel Preview, `prd` → Vercel
    Production), with Sensitive on. Do not attach a Vercel integration to

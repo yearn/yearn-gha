@@ -20,7 +20,8 @@ env:
   # Shared Doppler project holding VERCEL_TOKEN and VERCEL_ORG_ID in the
   # deploy config, used by every app deploy.
   SHARED_PROJECT: webops-shared-prod
-  SHARED_CONFIG: deploy-configs
+  # Config slug used by both the shared and app fetches.
+  DEPLOY_CONFIG: deploy-configs
   # Pull requests deploy previews; any other trigger (push to the default
   # branch) deploys production.
   DEPLOY_ENV: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
@@ -66,26 +67,26 @@ jobs:
       # exports every secret in the config, so a broader config would pull
       # app secrets onto the runner. App secrets reach Vercel via Doppler
       # integrations, never through this workflow.
-      - name: Load shared Vercel credentials from Doppler
+      - name: Load shared Vercel token and org ID from Doppler
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
         with:
           auth-method: oidc
           # Same identity as the app fetch; must have read on shared deploy.
           doppler-identity-id: ${{ inputs.identity-id }}
           doppler-project: ${{ env.SHARED_PROJECT }}
-          doppler-config: ${{ env.SHARED_CONFIG }}
+          doppler-config: ${{ env.DEPLOY_CONFIG }}
           inject-env-vars: true
 
-      # Loads project specific secrets - VERCEL_PROJECT_ID from
-      # deploy-configs. Never fetch prd/preview here; those sync to Vercel
-      # and would dump app secrets onto the runner.
-      - name: Load Vercel credentials from Doppler
+      # Loads the app's VERCEL_PROJECT_ID from deploy-configs. Never fetch
+      # prd/preview here; those sync to Vercel and would dump app secrets
+      # onto the runner.
+      - name: Load app Vercel project ID from Doppler
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
         with:
           auth-method: oidc
           doppler-identity-id: ${{ inputs.identity-id }}
           doppler-project: ${{ inputs.project }}
-          doppler-config: deploy-configs
+          doppler-config: ${{ env.DEPLOY_CONFIG }}
           inject-env-vars: true
 
       - name: Validate Vercel credentials
