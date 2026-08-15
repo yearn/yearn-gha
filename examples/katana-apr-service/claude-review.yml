@@ -1,0 +1,17 @@
+name: Claude review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  review:
+    uses: yearn/yearn-gha/.github/workflows/claude-review.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      identity-id: ${{ vars.DOPPLER_REVIEW_IDENTITY_ID }}
+      scripts-ref: <approved-sha> # same SHA as the workflow pin above

@@ -149,3 +149,51 @@ Do the same steps for the preview environment if needed.
 
 See `examples/` for the current Katana APR, yvUSD APR, and fapy-hook shapes.
 See `specs/doppler-vercel.md` for the full operating guide.
+
+# Claude PR review
+
+Reusable workflow (`.github/workflows/claude-review.yml`) that reviews pull
+requests with Claude using the same [`review-pr`
+skill](https://github.com/yearn/webops/blob/main/skills/review-pr/SKILL.md)
+used in local review sessions, pinned to a commit SHA. Same-repo PRs only;
+forks are rejected. `ANTHROPIC_API_KEY` resolves from `webops-shared-prod` /
+`review-configs` via Doppler OIDC — no static secrets in GitHub.
+
+Reviews are **opt-in per PR**. The author enables them by adding tags as the
+last lines of the PR description:
+
+```
+review=true
+model=opus
+```
+
+`model` is optional (`fable`, `opus`, or `haiku`; default `opus`). Every push
+to an opted-in PR posts a fresh review comment; a new push cancels an
+in-flight review. PRs without the tags skip before any credential is loaded.
+
+Caller stub for downstream repos (see
+`examples/katana-apr-service/claude-review.yml`):
+
+```yaml
+name: Claude review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  review:
+    uses: yearn/yearn-gha/.github/workflows/claude-review.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      identity-id: ${{ vars.DOPPLER_REVIEW_IDENTITY_ID }}
+      scripts-ref: <approved-sha> # same SHA as the workflow pin above
+```
+
+The review engine is `scripts/claude-review.sh`, runnable locally with a
+`.env` (see `.env.example`) — the workflow is a thin wrapper around it. Full
+operating guide: `specs/claude-review.md`.

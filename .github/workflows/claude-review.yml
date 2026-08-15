@@ -1,0 +1,102 @@
+name: Claude review
+
+on:
+  workflow_call:
+    inputs:
+      identity-id:
+        description: Doppler service account identity ID with read access to the shared review config.
+        required: true
+        type: string
+      scripts-ref:
+        description: yearn-gha ref providing scripts/claude-review.sh. Pin to the same approved commit SHA the caller pins this workflow to (the github context does not expose the called workflow's own sha).
+        required: true
+        type: string
+
+env:
+  # Shared Doppler project holding ANTHROPIC_API_KEY in the review config,
+  # used by every app review. Keep the config to that one secret: the fetch
+  # action exports everything in it onto the runner.
+  SHARED_PROJECT: webops-shared-prod
+  REVIEW_CONFIG: review-configs
+  # Claude Code CLI version; bump deliberately.
+  CLAUDE_CODE_VERSION: 2.1.233
+  PR_URL: ${{ github.event.pull_request.html_url }}
+
+jobs:
+  review:
+    name: Claude review
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # One review per PR at a time; a new push cancels the in-flight review.
+    concurrency:
+      group: claude-review-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      # Reviews are driven by the PR description tags; any other trigger has
+      # no PR to review and must not reach Doppler.
+      - name: Reject non-pull_request triggers
+        if: github.event_name != 'pull_request'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          printf '::error::claude-review only runs on pull_request events; got %s\n' "$EVENT_NAME" >&2
+          exit 1
+
+      # Fork PRs never receive an OIDC token; fail explicitly instead of
+      # letting the Doppler login error obscure the cause.
+      - name: Reject fork pull requests
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::error::pull requests from forks are not reviewed (no OIDC token is issued)" >&2
+          exit 1
+
+      # The review script ships with this reusable workflow; the caller pins
+      # scripts-ref to the same approved sha as the workflow itself.
+      - name: Checkout review script
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: yearn/yearn-gha
+          ref: ${{ inputs.scripts-ref }}
+          path: yearn-gha
+
+      # Reviews are opt-in via tags at the bottom of the PR description.
+      # Decide before loading any credentials; untagged PRs never touch
+      # Doppler or Claude.
+      - name: Check opt-in tags
+        id: optin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./yearn-gha/scripts/claude-review.sh --check "$PR_URL" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Load Claude API key from Doppler
+        if: steps.optin.outputs.review-requested == 'true'
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ inputs.identity-id }}
+          doppler-project: ${{ env.SHARED_PROJECT }}
+          doppler-config: ${{ env.REVIEW_CONFIG }}
+          inject-env-vars: true
+
+      - name: Validate Claude API key
+        if: steps.optin.outputs.review-requested == 'true'
+        run: |
+          set -euo pipefail
+          if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "::error::ANTHROPIC_API_KEY must resolve from the shared Doppler review config" >&2
+            exit 1
+          fi
+
+      - name: Install Claude Code CLI
+        if: steps.optin.outputs.review-requested == 'true'
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: Review and post comment
+        if: steps.optin.outputs.review-requested == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./yearn-gha/scripts/claude-review.sh --post "$PR_URL"
