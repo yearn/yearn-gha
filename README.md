@@ -149,3 +149,73 @@ Do the same steps for the preview environment if needed.
 
 See `examples/` for the current Katana APR, yvUSD APR, and fapy-hook shapes.
 See `specs/doppler-vercel.md` for the full operating guide.
+
+# Claude code review
+
+Reusable GitHub workflow (`.github/workflows/claude-code-review.yml`) that runs
+an automated Claude review on pull requests with
+[`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action).
+It is callable only through `workflow_call` — the caller supplies the trigger —
+and authenticates with a Claude Code OAuth token from the caller's secrets.
+
+Reviews are on demand: a collaborator comments `/review` on a pull request,
+and the caller workflow dispatches the reusable workflow. The workflow checks
+out the PR head, reviews the diff, and posts feedback as PR comments:
+`gh pr comment` for top-level feedback and inline comments for specific code
+issues. The prompt covers code quality, bugs, security, and performance.
+
+Anything other than a `/review` comment on a pull request fails before the
+action runs. Because `issue_comment` runs with repository secrets no matter
+who comments, only commenters with write access (owner, member, collaborator)
+are accepted, and fork pull requests are rejected.
+
+Full operating guide: `specs/claude-code-review.md`.
+
+## Usage
+
+```yaml
+name: Claude code review
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: claude-review-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
+    uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # pin to the approved full commit SHA
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+```
+
+Caller workflows must grant `pull-requests: write` (posting review comments)
+in addition to `contents: read`. Reusable workflows cannot elevate beyond the
+caller's token permissions; the workflow passes its own `github.token` to the
+action so GitHub operations stay within these permissions.
+
+## Secrets
+
+| Name                      | Required | Description                                                        |
+| ------------------------- | -------- | ------------------------------------------------------------------ |
+| `CLAUDE_CODE_OAUTH_TOKEN` | yes      | Claude Code OAuth token, generated with `claude setup-token`.      |
+
+Create the token locally with `claude setup-token` (requires a Claude
+subscription) and store it as an Actions repository secret in each caller.
+Pass it explicitly as above, or use `secrets: inherit`. The workflow fails
+fast if the token resolves empty (e.g. `secrets: inherit` with the secret
+never defined in the caller).
+
+There are no inputs; the prompt and tool allowlist live only in the reusable
+workflow. The caller's `if` gate is a convenience (it skips runs instead of
+failing them); the reusable workflow re-checks the event, the `/review`
+command, the commenter's access, and the PR origin, and fails closed.
+
+See `examples/claude-code-review/` for the caller.

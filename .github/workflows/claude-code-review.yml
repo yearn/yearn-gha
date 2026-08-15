@@ -1,0 +1,75 @@
+name: Claude code review
+
+on:
+  workflow_call:
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: "Claude Code OAuth token (from `claude setup-token`). Pass explicitly or via `secrets: inherit`."
+        required: true
+
+jobs:
+  review:
+    name: Claude code review
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      # Kept out of the step expression so the text needs no quote escaping.
+      DEFAULT_PROMPT: |
+        REPO: ${{ github.repository }}
+        PR NUMBER: ${{ github.event.issue.number }}
+
+        Review this pull request with a focus on:
+        - Code quality and best practices
+        - Potential bugs or issues
+        - Security implications
+        - Performance considerations
+
+        Note: the PR branch is already checked out in the current working directory.
+
+        Use `gh pr comment` for top-level feedback.
+        Use `mcp__github_inline_comment__create_inline_comment` (with `confirmed: true`) to highlight specific code issues.
+        Only post GitHub comments - do not submit review text as messages.
+    steps:
+      # The review runs only when a PR comment starts with /review; any other
+      # trigger has nothing to review. Fail before the action produces an
+      # obscure error, even if the caller forgot its own gate.
+      - name: Reject events other than a /review PR comment
+        if: ${{ github.event_name != 'issue_comment' || !github.event.issue.pull_request || !startsWith(github.event.comment.body, '/review') }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          printf '::error::claude-code-review only supports /review comments on pull requests; got %s\n' "$EVENT_NAME" >&2
+          exit 1
+
+      # issue_comment carries no PR head info; resolve it and refuse fork PRs
+      # so the token is never exercised against foreign code.
+      - name: Reject fork pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          head_repo="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.repo.full_name)"
+          if [[ "$head_repo" != "$REPO" ]]; then
+            echo "::error::pull requests from forks cannot run the review" >&2
+            exit 1
+          fi
+
+      - name: Checkout pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          fetch-depth: 1
+
+      - name: Run Claude code review
+        uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Without an explicit token the action falls back to its Claude
+          # GitHub App token, whose permissions ignore this job's block.
+          github_token: ${{ github.token }}
+          prompt: ${{ env.DEFAULT_PROMPT }}
+          claude_args: ${{ env.DEFAULT_CLAUDE_ARGS }}
