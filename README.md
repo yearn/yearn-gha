@@ -192,7 +192,7 @@ permissions:
 
 jobs:
   review:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # pin to the approved full commit SHA
 ```
 
@@ -220,8 +220,10 @@ Unmasked.
 Create the identity with OIDC (discovery/issuer URL
 `https://token.actions.githubusercontent.com`), trust the caller repositories
 in the org, and grant it read access to `webops-shared-prod` /
-`claude-review` only. Put its ID in the reusable workflow in place of the
-`<review-identity-id>` placeholder.
+`claude-review` only. Confirm `DOPPLER_IDENTITY_ID` in the reusable workflow
+matches that identity. The identity is org-trusted: any workflow in a trusted
+repo that grants `id-token: write` can fetch the token, not only this
+reusable workflow. The `/review` and fork gates bound this workflow only.
 
 To rotate, run `claude setup-token` again (requires a Claude subscription) and
 update that one Doppler secret; every caller picks up the new value on its

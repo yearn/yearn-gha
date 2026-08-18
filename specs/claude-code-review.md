@@ -34,7 +34,7 @@ The guide distinguishes two kinds of data:
 | Caller examples pin reusable workflow to full commit SHA | Done (examples use the `@<approved-sha>` placeholder; replace at rollout) |
 | Per-repo prompt/model/turn customization | **Not built.** No inputs; see rejected alternatives. |
 
-Remaining work is **operational**: create the Doppler identity and the `claude-review` config, store the token there, fill `<review-identity-id>` in the workflow, pin the approved SHA in callers, branch protection on `yearn/yearn-gha`.
+Remaining work is **operational**: create the Doppler identity and the `claude-review` config, store the token there, confirm `DOPPLER_IDENTITY_ID` in the workflow matches that identity, pin the approved SHA in callers, branch protection on `yearn/yearn-gha`.
 
 ## What this design protects—and what it does not
 
@@ -89,7 +89,7 @@ permissions:
 
 jobs:
   review:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # full commit SHA only
 ```
 
@@ -114,7 +114,7 @@ No outputs.
 ## Rollout runbook
 
 1. Generate the token: `claude setup-token` (requires a Claude subscription). Create the `claude-review` config in `webops-shared-prod` and store the token there as `CLAUDE_CODE_OAUTH_TOKEN`, visibility Masked.
-2. Create the Doppler service-account identity with OIDC (discovery/issuer URL `https://token.actions.githubusercontent.com`), trust the caller repositories, grant it read on `webops-shared-prod` / `claude-review` only, and put its ID in the workflow in place of `<review-identity-id>`.
+2. Create the Doppler service-account identity with OIDC (discovery/issuer URL `https://token.actions.githubusercontent.com`), trust the caller repositories, grant it read on `webops-shared-prod` / `claude-review` only, and confirm `DOPPLER_IDENTITY_ID` in the workflow matches that identity. Binding `job_workflow_ref` to this reusable workflow is optional; without it any org workflow with `id-token: write` can fetch the token (accepted risk above).
 3. Merge the reusable workflow; record the approved full commit SHA.
 4. Add the caller workflow (see `examples/claude-code-review/`), pinned to that SHA, granting `id-token: write`.
 5. Open a test PR and comment `/review`; confirm the review posts a top-level comment and inline comments, that a second `/review` cancels the in-flight run, and that a `/review` from a non-collaborator account fails at the gate.
