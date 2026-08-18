@@ -29,7 +29,11 @@ The guide distinguishes two kinds of data:
 | Validate `CLAUDE_CODE_OAUTH_TOKEN` non-empty after the Doppler fetch and before the action runs | Done |
 | `id-token: write` requested for the Doppler login only; no static credential in any caller | Done |
 | SHA-pinned actions (`actions/checkout`, `anthropics/claude-code-action` `v1.0.193` / `9d7150b…`) | Done |
-| Review prompt + `--allowedTools` restricted to PR commenting, defined only in the reusable workflow | Done |
+| Install `review-pr-workflow` (+ `review-pr`, `npm-policy`) from `yearn/webops-skills` pinned by `WEBOPS_SKILLS_SHA` | Done |
+| Action `prompt` is a `/review-pr-workflow` invocation, not an inlined review rubric | Done |
+| `--allowedTools` is read + git + lint + skill/workflow; no comment/write tools | Done |
+| Review body from `structured_output.review`; a follow-up step posts `gh pr comment` | Done |
+| PR checkout `persist-credentials: false`; one-shot extraheader fetch of `PR_BASE_REF` | Done |
 | Explicit `github_token: ${{ github.token }}` so the action cannot fall back to its Claude App token | Done |
 | Caller examples pin reusable workflow to full commit SHA | Done (examples use the `@<approved-sha>` placeholder; replace at rollout) |
 | Per-repo prompt/model/turn customization | **Not built.** No inputs; see rejected alternatives. |
@@ -40,7 +44,7 @@ Remaining work is **operational**: create the Doppler identity and the `claude-r
 
 Controls provided:
 
-- One reviewed implementation of event gates, pins, prompt, and tool allowlist. There are no inputs, so callers cannot widen the action's tool access at all; the `--allowedTools` list limits Claude to `gh pr comment`, `gh pr diff`, `gh pr view`, and inline review comments.
+- One reviewed implementation of event gates, pins, skill invocation, and tool allowlist. There are no inputs, so callers cannot widen the action's tool access at all. `--allowedTools` covers Read/Grep/Glob/Skill/Task/Agent/Workflow/WebFetch, read-only `gh`/`git`, and lint package managers — not Write/Edit, and not `gh pr comment`. The comment is posted by a later step from `structured_output`.
 - Anything that is not a `/review` PR comment from a commenter with write access on a same-repo PR fails before the action executes, so the token is never exercised outside the intended context. Unlike `pull_request`, `issue_comment` runs with repository secrets regardless of who comments — the author-association and fork guards are what stand between a drive-by commenter and the token.
 - Full-SHA pins on both the action and the reusable workflow prevent a moved tag from silently changing executed code.
 - The workflow requests only `contents: read`, `pull-requests: write`, and `id-token: write`, and passes its own `github.token` to the action, so GitHub operations are bounded by those permissions. `id-token: write` serves the Doppler login alone; the pinned action's own OIDC federation path stays unused.
@@ -50,15 +54,16 @@ Risks that remain:
 
 - `CLAUDE_CODE_OAUTH_TOKEN` is a long-lived credential on the runner for the duration of the run. The Doppler fetch is short-lived, the token it returns is not; there is no OIDC equivalent for the Claude credential itself today. Storage and rotation are now centralized (one Doppler secret, `claude setup-token` again). **Accepted risk — state it plainly:** a compromised run can read the token.
 - The Doppler identity trusts every caller repository in the org, so any workflow in any org repository can authenticate as it and fetch the token directly — not only this reusable workflow. **Accepted risk — state it plainly:** the workflow's gates bound what this workflow does with the token, not who else in the org can read it.
-- The reviewed code executes nothing, but Claude reads the PR contents; a malicious same-repo PR can attempt prompt injection to make the review post misleading comments. The tool allowlist bounds the blast radius to PR comments — it cannot push code, approve, or merge.
+- The reviewed code executes nothing, but Claude reads the PR contents; a malicious same-repo PR can still prompt-inject. Blast radius is larger than “comments only”: Claude can run `git`/lint and spawn subagents. **Residual risk — state it plainly.** It still cannot push (`persist-credentials: false`) or merge.
 - The commenter gate trusts `author_association`. Owners, members, and collaborators can spend review tokens at will; there is no rate limit beyond per-PR concurrency cancellation in the caller.
 - Review comments are advisory. The workflow is not a required check and must not gate merges; Claude review does not replace human review.
 
 ## Target architecture
 
 - A small caller workflow in each repository triggers on `issue_comment` (`types: [created]`), gates on `/review` comments on PRs, and invokes the SHA-pinned reusable workflow.
-- The reusable workflow re-checks the gates (fail closed, in case the caller's `if` is missing or wrong), resolves and checks out the PR head (`refs/pull/<n>/head`, `fetch-depth: 1`), fetches the OAuth token from Doppler over OIDC and validates it non-empty, and runs the action with the built-in prompt: review for code quality, bugs, security, performance; post feedback via `gh pr comment` and inline comments.
-- There is no per-caller customization; the prompt and tool allowlist live only in the reusable workflow.
+- The reusable workflow re-checks the gates (fail closed, in case the caller's `if` is missing or wrong), writes `PR_BASE_REF` from the same PR API call, checks out the PR head (`refs/pull/<n>/head`, `fetch-depth: 0`, `persist-credentials: false`), fetches the base with a one-shot `http.extraheader` bearer, installs `review-pr-workflow` / `review-pr` / `npm-policy` from `yearn/webops-skills` at `WEBOPS_SKILLS_SHA`, then fetches the OAuth token from Doppler over OIDC and validates it non-empty.
+- The action `prompt` is `/review-pr-workflow <repo>/pull/<n>`. Claude does not post. `--json-schema` requires a `review` string; the next step posts it with `gh pr comment`, same as `examples/test-failure-analysis.yml`. The PR head is already checked out.
+- There is no per-caller customization; the skill pin, prompt, and tool allowlist live only in the reusable workflow. Bump the skill by changing `WEBOPS_SKILLS_SHA` in a reviewed PR, same as other pins.
 
 Rejected alternatives:
 
@@ -67,7 +72,8 @@ Rejected alternatives:
 - **Interactive `@claude` mention mode.** The action's conversational mode needs a broader permission surface than a single fire-and-forget review. Out of scope; explicitly future — the trigger plumbing (`issue_comment`, commenter gate) now exists, so it is cheap to add behind a reviewed change.
 - **Direct `issue_comment` trigger inside the reusable workflow.** Would make this repo review its own PRs only. `workflow_call` keeps one implementation for many callers, matching `vercel-deploy.yml`.
 - **Per-caller Actions secret (`CLAUDE_CODE_OAUTH_TOKEN`).** The pre-pivot design: each caller stored the token and passed it explicitly or through `secrets: inherit`. It puts the same long-lived credential in N repositories, and rotation means N manual updates that drift. Doppler holds one entry and one identity; callers hold nothing.
-- **Per-caller `prompt` / `claude-args` inputs.** Existed in an earlier draft; removed. Every input is surface a caller can get wrong (a `claude-args` override that drops `--allowedTools` silently posts nothing; a copied allowlist drifts from the central one). Repos that need a different prompt can propose it here, keeping one reviewed implementation. Explicitly future if a real need appears — the input plumbing is a small reviewed diff.
+- **Per-caller `prompt` / `claude-args` inputs.** Existed in an earlier draft; removed. Every input is surface a caller can get wrong (a `claude-args` override that drops `--allowedTools` silently posts nothing; a copied allowlist drifts from the central one). Repos that need a different review skill or pin can propose it here, keeping one reviewed implementation. Explicitly future if a real need appears — the input plumbing is a small reviewed diff.
+- **Inlined quality/bugs/security/performance prompt.** Replaced by the pinned Yearn `review-pr-workflow` skill so the rubric lives in `yearn/webops-skills`, not this workflow. The action prompt is only the invocation plus non-interactive CI constraints.
 
 ### Caller shape
 
@@ -103,7 +109,7 @@ No outputs.
 
 ## GitHub controls
 
-- Pin `anthropics/claude-code-action`, `actions/checkout`, and `dopplerhq/secrets-fetch-action` to full commit SHAs; version comments are informational only. Upgrade through reviewed changes.
+- Pin `anthropics/claude-code-action`, `actions/checkout`, `dopplerhq/secrets-fetch-action`, and `WEBOPS_SKILLS_SHA` to full commit SHAs; version comments are informational only. Upgrade through reviewed changes.
 - Callers pin the reusable workflow to a full commit SHA. Update in a reviewed rollout.
 - Protect the default branch of `yearn/yearn-gha`; this repo is shared CI infrastructure. CODEOWNERS on `.github/workflows/**`.
 - Store `CLAUDE_CODE_OAUTH_TOKEN` only in Doppler (`webops-shared-prod` / `claude-review`), with Masked visibility so the fetch action registers GitHub log redaction. Do not commit it, and do not add it as an Actions secret or variable in any caller.
@@ -126,5 +132,6 @@ No outputs.
 - [claude-code-action usage docs](https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md)
 - [claude-code-action solutions (automated review example)](https://github.com/anthropics/claude-code-action/blob/main/docs/solutions.md)
 - [Reusing workflows (secrets and permissions)](https://docs.github.com/en/actions/using-workflows/reusing-workflows)
+- Skills: `yearn/webops-skills` — `review-pr-workflow`, `review-pr`, `npm-policy` (pin `WEBOPS_SKILLS_SHA`)
 - Repo implementation: `yearn/yearn-gha` — `.github/workflows/claude-code-review.yml`
 - Caller examples: `examples/claude-code-review/`

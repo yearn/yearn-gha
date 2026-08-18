@@ -161,9 +161,10 @@ OIDC. No static secret lives in the caller.
 
 Reviews are on demand: a collaborator comments `/review` on a pull request,
 and the caller workflow dispatches the reusable workflow. The workflow checks
-out the PR head, reviews the diff, and posts feedback as PR comments:
-`gh pr comment` for top-level feedback and inline comments for specific code
-issues. The prompt covers code quality, bugs, security, and performance.
+out the PR head, installs the pinned `review-pr-workflow` skill from
+`yearn/webops-skills`, and reads the review from the action's
+`structured_output`. A follow-up step posts that body with `gh pr comment`.
+The action prompt invokes that skill; it is not an inlined rubric.
 
 Anything other than a `/review` comment on a pull request fails before the
 action runs. Because `issue_comment` runs with repository secrets no matter
