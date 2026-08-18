@@ -131,13 +131,21 @@ jobs:
       - name: Validate Claude credentials
         run: |
           set -euo pipefail
-          if [[ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+          token="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+          token="${token//$'\r'/}"
+          token="${token//$'\n'/}"
+          token="${token#\"}"
+          token="${token%\"}"
+          if [[ -z "$token" ]]; then
             echo "::error::CLAUDE_CODE_OAUTH_TOKEN must resolve from Doppler" >&2
             exit 1
           fi
+          printf 'token length=%s prefix=%s\n' "${#token}" "${token:0:12}"
+          echo "CLAUDE_CODE_OAUTH_TOKEN=$token" >> "$GITHUB_ENV"
 
       - name: Run Claude code review
         id: claude
+        continue-on-error: true
         uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
         with:
           claude_code_oauth_token: ${{ env.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -147,7 +155,22 @@ jobs:
           prompt: ${{ env.DEFAULT_PROMPT }}
           claude_args: ${{ env.DEFAULT_CLAUDE_ARGS }}
 
+      - name: Show Claude result envelope
+        if: always()
+        run: |
+          set -euo pipefail
+          f="${{ steps.claude.outputs.execution_file }}"
+          if [[ -z "$f" || ! -f "$f" ]]; then
+            f="${RUNNER_TEMP}/claude-execution-output.json"
+          fi
+          if [[ ! -f "$f" ]]; then
+            echo "::error::no claude-execution-output.json" >&2
+            exit 1
+          fi
+          jq '[.[] | select(.type=="result")] | last | {subtype, is_error, errors, stop_reason, result, total_cost_usd, num_turns}' "$f"
+
       - name: Comment on PR
+        if: steps.claude.outcome == 'success' || steps.claude.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
