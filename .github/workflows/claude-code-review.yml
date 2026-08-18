@@ -2,10 +2,6 @@ name: Claude code review
 
 on:
   workflow_call:
-    secrets:
-      CLAUDE_CODE_OAUTH_TOKEN:
-        description: "Claude Code OAuth token (from `claude setup-token`). Pass explicitly or via `secrets: inherit`."
-        required: true
 
 jobs:
   review:
@@ -13,8 +9,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
       pull-requests: write
     env:
+      # Shared Doppler project holding the Claude Code OAuth token, used by
+      # every caller repository.
+      SHARED_PROJECT: webops-shared-prod
+      # Dedicated config: the fetch action exports every secret in the config,
+      # so reusing deploy-configs would put VERCEL_TOKEN on the review runner
+      # and the OAuth token on deploy runners.
+      REVIEW_CONFIG: claude-review
+      # Single service-account identity, trusted for every caller repository in
+      # the org; read access on the review config only.
+      DOPPLER_IDENTITY_ID: 11d2108f-ddc2-48f6-ad9c-e7fde0043741
       # Kept out of the step expression so the text needs no quote escaping.
       DEFAULT_PROMPT: |
         REPO: ${{ github.repository }}
@@ -64,10 +71,19 @@ jobs:
           ref: refs/pull/${{ github.event.issue.number }}/head
           fetch-depth: 1
 
+      - name: Load Claude OAuth token from Doppler
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ env.DOPPLER_IDENTITY_ID }}
+          doppler-project: ${{ env.SHARED_PROJECT }}
+          doppler-config: ${{ env.REVIEW_CONFIG }}
+          inject-env-vars: true
+
       - name: Run Claude code review
         uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ env.CLAUDE_CODE_OAUTH_TOKEN }}
           # Without an explicit token the action falls back to its Claude
           # GitHub App token, whose permissions ignore this job's block.
           github_token: ${{ github.token }}

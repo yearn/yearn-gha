@@ -10,11 +10,10 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
   pull-requests: write
 
 jobs:
   review:
     if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
     uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # pin to the approved full commit SHA
-    secrets:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

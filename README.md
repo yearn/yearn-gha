@@ -156,7 +156,8 @@ Reusable GitHub workflow (`.github/workflows/claude-code-review.yml`) that runs
 an automated Claude review on pull requests with
 [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action).
 It is callable only through `workflow_call` — the caller supplies the trigger —
-and authenticates with a Claude Code OAuth token from the caller's secrets.
+and authenticates with a Claude Code OAuth token resolved from Doppler via
+OIDC. No static secret lives in the caller.
 
 Reviews are on demand: a collaborator comments `/review` on a pull request,
 and the caller workflow dispatches the reusable workflow. The workflow checks
@@ -186,32 +187,45 @@ concurrency:
 
 permissions:
   contents: read
+  id-token: write
   pull-requests: write
 
 jobs:
   review:
     if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
     uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # pin to the approved full commit SHA
-    secrets:
-      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 ```
 
-Caller workflows must grant `pull-requests: write` (posting review comments)
-in addition to `contents: read`. Reusable workflows cannot elevate beyond the
-caller's token permissions; the workflow passes its own `github.token` to the
-action so GitHub operations stay within these permissions.
+Caller workflows must grant `id-token: write` (OIDC login to Doppler) and
+`pull-requests: write` (posting review comments), in addition to
+`contents: read`. Reusable workflows cannot elevate beyond the caller's token
+permissions; the workflow passes its own `github.token` to the action so
+GitHub operations stay within these permissions.
 
-## Secrets
+## Doppler setup
 
-| Name                      | Required | Description                                                        |
-| ------------------------- | -------- | ------------------------------------------------------------------ |
-| `CLAUDE_CODE_OAUTH_TOKEN` | yes      | Claude Code OAuth token, generated with `claude setup-token`.      |
+The Claude Code OAuth token is stored once, as `CLAUDE_CODE_OAUTH_TOKEN` in
+the `claude-review` config of the shared `webops-shared-prod` project. The
+workflow authenticates to Doppler as a service-account identity with the
+GitHub Actions OIDC token and fetches it at run time; no caller repository
+holds an Actions secret.
 
-Create the token locally with `claude setup-token` (requires a Claude
-subscription) and store it as an Actions repository secret in each caller.
-Pass it explicitly as above, or use `secrets: inherit`. The workflow fails
-fast if the token resolves empty (e.g. `secrets: inherit` with the secret
-never defined in the caller).
+Keep ONLY that token in `claude-review` — the fetch action exports every
+secret in the config onto the runner. That is also why the review does not
+reuse `deploy-configs`: sharing it would put `VERCEL_TOKEN` on review runners
+and the OAuth token on deploy runners. Set the token's visibility to Masked;
+the fetch action registers GitHub log redaction only for values that are not
+Unmasked.
+
+Create the identity with OIDC (discovery/issuer URL
+`https://token.actions.githubusercontent.com`), trust the caller repositories
+in the org, and grant it read access to `webops-shared-prod` /
+`claude-review` only. Put its ID in the reusable workflow in place of the
+`<review-identity-id>` placeholder.
+
+To rotate, run `claude setup-token` again (requires a Claude subscription) and
+update that one Doppler secret; every caller picks up the new value on its
+next run. The workflow fails fast if the token resolves empty.
 
 There are no inputs; the prompt and tool allowlist live only in the reusable
 workflow. The caller's `if` gate is a convenience (it skips runs instead of
