@@ -31,10 +31,10 @@ jobs:
 
         This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval.
 
-        Put the assembled review (skill Review Format, raw markdown, no preamble, no fence) in the `review` field.
+        Reply with the assembled review only (skill Review Format, raw markdown, no preamble, no fence).
       DEFAULT_CLAUDE_ARGS: |
+        --setting-sources user
         --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,WebFetch,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git *),Bash(bun *),Bash(npm *),Bash(pnpm *),Bash(yarn *)"
-        --json-schema '{"type":"object","properties":{"review":{"type":"string","description":"Full review markdown in the skill Review Format"}},"required":["review"]}'
     steps:
       # The review runs only when a PR comment starts with /review; any other
       # trigger has nothing to review. Fail before the action produces an
@@ -107,16 +107,16 @@ jobs:
             skills/review-pr
             skills/npm-policy
 
-      - name: Link review skills
+      - name: Install review skills
         run: |
           set -euo pipefail
           mv "$GITHUB_WORKSPACE/.webops-skills" "${RUNNER_TEMP}/webops-skills"
-          mkdir -p "$HOME/.claude/skills" "$GITHUB_WORKSPACE/.claude/skills"
+          mkdir -p "$HOME/.claude/skills"
           for s in review-pr-workflow review-pr npm-policy; do
             src="${RUNNER_TEMP}/webops-skills/skills/$s"
             test -d "$src"
-            ln -sfn "$src" "$HOME/.claude/skills/$s"
-            ln -sfn "$src" "$GITHUB_WORKSPACE/.claude/skills/$s"
+            rm -rf "$HOME/.claude/skills/$s"
+            cp -a "$src" "$HOME/.claude/skills/$s"
           done
 
       - name: Load Claude OAuth token from Doppler
@@ -147,23 +147,24 @@ jobs:
           prompt: ${{ env.DEFAULT_PROMPT }}
           claude_args: ${{ env.DEFAULT_CLAUDE_ARGS }}
 
-      # Same pattern as anthropics/claude-code-action examples/test-failure-analysis.yml:
-      # Claude returns structured_output; this step is the only GitHub write.
       - name: Comment on PR
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           OUTPUT: ${{ steps.claude.outputs.structured_output }}
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           set -euo pipefail
-          if [[ -z "${OUTPUT:-}" ]]; then
-            echo "::error::claude-code-action produced no structured_output" >&2
-            exit 1
+          review=""
+          if [[ -n "${OUTPUT:-}" ]]; then
+            review="$(printf '%s\n' "$OUTPUT" | jq -r '.review // empty')"
           fi
-          review="$(printf '%s\n' "$OUTPUT" | jq -r '.review // empty')"
+          if [[ -z "$review" || "$review" == "null" ]] && [[ -n "${EXEC_FILE:-}" && -f "$EXEC_FILE" ]]; then
+            review="$(jq -r '[.[] | select(.type=="result") | .result // empty] | last // empty' "$EXEC_FILE")"
+          fi
           if [[ -z "$review" || "$review" == "null" ]]; then
-            echo "::error::structured_output.review is empty" >&2
+            echo "::error::claude-code-action produced no review text" >&2
             exit 1
           fi
           printf '%s\n' "$review" > "${RUNNER_TEMP}/review.md"

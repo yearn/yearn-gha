@@ -32,7 +32,7 @@ The guide distinguishes two kinds of data:
 | Install `review-pr-workflow` (+ `review-pr`, `npm-policy`) from `yearn/webops-skills` pinned by `WEBOPS_SKILLS_SHA` | Done |
 | Action `prompt` invokes the pinned `review-pr-workflow` skill, not an inlined review rubric | Done |
 | `--allowedTools` is read + git + lint + skill/workflow; no comment/write tools | Done |
-| Review body from `structured_output.review`; a follow-up step posts `gh pr comment` | Done |
+| Review body from the action result text; a follow-up step posts `gh pr comment` | Done |
 | PR checkout `persist-credentials: false`; one-shot extraheader fetch of `PR_BASE_REF` | Done |
 | Explicit `github_token: ${{ github.token }}` so the action cannot fall back to its Claude App token | Done |
 | Caller examples pin reusable workflow to full commit SHA | Done (examples use the `@<approved-sha>` placeholder; replace at rollout) |
@@ -44,7 +44,7 @@ Remaining work is **operational**: create the Doppler identity and the `claude-r
 
 Controls provided:
 
-- One reviewed implementation of event gates, pins, skill invocation, and tool allowlist. There are no inputs, so callers cannot widen the action's tool access at all. `--allowedTools` covers Read/Grep/Glob/Skill/Task/Agent/Workflow/WebFetch, read-only `gh`/`git`, and lint package managers — not Write/Edit, and not `gh pr comment`. The comment is posted by a later step from `structured_output`.
+- One reviewed implementation of event gates, pins, skill invocation, and tool allowlist. There are no inputs, so callers cannot widen the action's tool access at all. `--allowedTools` covers Read/Grep/Glob/Skill/Task/Agent/Workflow/WebFetch, read-only `gh`/`git`, and lint package managers — not Write/Edit, and not `gh pr comment`. The comment is posted by a later step from the action result text.
 - Anything that is not a `/review` PR comment from a commenter with write access on a same-repo PR fails before the action executes, so the token is never exercised outside the intended context. Unlike `pull_request`, `issue_comment` runs with repository secrets regardless of who comments — the author-association and fork guards are what stand between a drive-by commenter and the token.
 - Full-SHA pins on both the action and the reusable workflow prevent a moved tag from silently changing executed code.
 - The workflow requests only `contents: read`, `pull-requests: write`, and `id-token: write`, and passes its own `github.token` to the action, so GitHub operations are bounded by those permissions. `id-token: write` serves the Doppler login alone; the pinned action's own OIDC federation path stays unused.
@@ -62,7 +62,7 @@ Risks that remain:
 
 - A small caller workflow in each repository triggers on `issue_comment` (`types: [created]`) and invokes the SHA-pinned reusable workflow.
 - The reusable workflow owns the gates (fail closed), writes `PR_BASE_REF` from the same PR API call, checks out the PR head (`refs/pull/<n>/head`, `fetch-depth: 0`, `persist-credentials: false`), fetches the base with a one-shot `http.extraheader` basic `x-access-token`, installs `review-pr-workflow` / `review-pr` / `npm-policy` from `yearn/webops-skills` at `WEBOPS_SKILLS_SHA`, then fetches the OAuth token from Doppler over OIDC and validates it non-empty.
-- The action `prompt` tells Claude to review the PR URL with the `review-pr-workflow` skill (plain text, not a `/` slash command — those are consumed by the action and never reach the model). Claude does not post. `--json-schema` requires a `review` string; the next step posts it with `gh pr comment`, same as `examples/test-failure-analysis.yml`. The PR head is already checked out.
+- The action `prompt` tells Claude to review the PR URL with the `review-pr-workflow` skill (plain text, not a `/` slash command — those are consumed by the action and never reach the model). Skills are copied into `~/.claude/skills` and loaded with `--setting-sources user` so the action's untrusted-PR `.claude` snapshot cannot replace them. Claude does not post. `--json-schema` is not used (it fails the action when the run errors, and skills often skip `structured_output`). The next step posts the result text with `gh pr comment`. The PR head is already checked out.
 - There is no per-caller customization; the skill pin, prompt, and tool allowlist live only in the reusable workflow. Bump the skill by changing `WEBOPS_SKILLS_SHA` in a reviewed PR, same as other pins.
 
 Rejected alternatives:
