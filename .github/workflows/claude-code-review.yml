@@ -99,7 +99,7 @@ jobs:
         with:
           repository: ${{ env.WEBOPS_SKILLS_REPO }}
           ref: ${{ env.WEBOPS_SKILLS_SHA }}
-          path: ${{ runner.temp }}/webops-skills
+          path: .webops-skills
           persist-credentials: false
           sparse-checkout: |
             skills/review-pr-workflow
@@ -109,9 +109,10 @@ jobs:
       - name: Link review skills
         run: |
           set -euo pipefail
+          mv "$GITHUB_WORKSPACE/.webops-skills" "${RUNNER_TEMP}/webops-skills"
           mkdir -p "$HOME/.claude/skills" "$GITHUB_WORKSPACE/.claude/skills"
           for s in review-pr-workflow review-pr npm-policy; do
-            src="${{ runner.temp }}/webops-skills/skills/$s"
+            src="${RUNNER_TEMP}/webops-skills/skills/$s"
             test -d "$src"
             ln -sfn "$src" "$HOME/.claude/skills/$s"
             ln -sfn "$src" "$GITHUB_WORKSPACE/.claude/skills/$s"
