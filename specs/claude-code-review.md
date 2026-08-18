@@ -60,8 +60,8 @@ Risks that remain:
 
 ## Target architecture
 
-- A small caller workflow in each repository triggers on `issue_comment` (`types: [created]`), gates on `/review` comments on PRs, and invokes the SHA-pinned reusable workflow.
-- The reusable workflow re-checks the gates (fail closed, in case the caller's `if` is missing or wrong), writes `PR_BASE_REF` from the same PR API call, checks out the PR head (`refs/pull/<n>/head`, `fetch-depth: 0`, `persist-credentials: false`), fetches the base with a one-shot `http.extraheader` bearer, installs `review-pr-workflow` / `review-pr` / `npm-policy` from `yearn/webops-skills` at `WEBOPS_SKILLS_SHA`, then fetches the OAuth token from Doppler over OIDC and validates it non-empty.
+- A small caller workflow in each repository triggers on `issue_comment` (`types: [created]`) and invokes the SHA-pinned reusable workflow.
+- The reusable workflow owns the gates (fail closed), writes `PR_BASE_REF` from the same PR API call, checks out the PR head (`refs/pull/<n>/head`, `fetch-depth: 0`, `persist-credentials: false`), fetches the base with a one-shot `http.extraheader` bearer, installs `review-pr-workflow` / `review-pr` / `npm-policy` from `yearn/webops-skills` at `WEBOPS_SKILLS_SHA`, then fetches the OAuth token from Doppler over OIDC and validates it non-empty.
 - The action `prompt` is `/review-pr-workflow <repo>/pull/<n>`. Claude does not post. `--json-schema` requires a `review` string; the next step posts it with `gh pr comment`, same as `examples/test-failure-analysis.yml`. The PR head is already checked out.
 - There is no per-caller customization; the skill pin, prompt, and tool allowlist live only in the reusable workflow. Bump the skill by changing `WEBOPS_SKILLS_SHA` in a reviewed PR, same as other pins.
 
@@ -95,7 +95,6 @@ permissions:
 
 jobs:
   review:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # full commit SHA only
 ```
 

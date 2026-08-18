@@ -193,7 +193,6 @@ permissions:
 
 jobs:
   review:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # pin to the approved full commit SHA
 ```
 
@@ -230,9 +229,9 @@ To rotate, run `claude setup-token` again (requires a Claude subscription) and
 update that one Doppler secret; every caller picks up the new value on its
 next run. The workflow fails fast if the token resolves empty.
 
-There are no inputs; the prompt and tool allowlist live only in the reusable
-workflow. The caller's `if` gate is a convenience (it skips runs instead of
-failing them); the reusable workflow re-checks the event, the `/review`
-command, the commenter's access, and the PR origin, and fails closed.
+There are no inputs; the prompt, tool allowlist, and gates live only in the
+reusable workflow. The caller supplies the `issue_comment` trigger, permissions,
+and SHA pin. The reusable workflow checks the event, the `/review` command,
+the commenter's access, and the PR origin, and fails closed.
 
 See `examples/claude-code-review/` for the caller.
