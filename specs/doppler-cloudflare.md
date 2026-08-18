@@ -50,14 +50,14 @@ Provided controls (shared with the Vercel design):
 Not eliminated:
 
 - `CLOUDFLARE_API_TOKEN` is still a long-lived credential exposed to wrangler on the runner. Compromise is account-wide.
-- **The build runs on the runner.** Unlike Vercel remote builds, `npm ci` / `bun install` executes third-party install scripts with the Cloudflare token present in the job environment. This is the main structural difference from the Vercel design and the reason install happens only after event checks pass. Residual risk: a compromised dependency can exfiltrate the deploy token. Mitigation is dependency hygiene (lockfiles, review of lockfile diffs), not this workflow.
+- **The build runs on the runner.** Unlike Vercel remote builds, `bun install` executes third-party install scripts with the Cloudflare token present in the job environment. This is the main structural difference from the Vercel design and the reason install happens only after event checks pass. Residual risk: a compromised dependency can exfiltrate the deploy token. Mitigation is dependency hygiene (lockfiles, review of lockfile diffs), not this workflow.
 - OIDC policy is an authorization boundary only when all relevant claims are checked; identity IDs are public metadata.
 
 ## Target architecture
 
 - A small caller workflow in each worker repository invokes the SHA-pinned reusable workflow in `yearn/yearn-gha`.
 - The only supported trigger is a push to the caller repository's default branch, which runs `wrangler deploy`. Everything else is rejected before Doppler authentication.
-- The workflow fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `webops-shared-prod` / `cloudflare-deploy-configs`, validates them, installs dependencies (bun or npm, detected by lockfile), and runs `wrangler deploy` via `cloudflare/wrangler-action` with wrangler pinned to `4.124.0`.
+- The workflow fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `webops-shared-prod` / `cloudflare-deploy-configs`, validates them, installs dependencies with `bun install --frozen-lockfile` (the fleet standardizes on bun), and runs `wrangler deploy` via `cloudflare/wrangler-action` with wrangler pinned to `4.124.0`.
 - Output: `deployment-url` — the production URL parsed by the action.
 
 ### Caller shape
