@@ -39,11 +39,13 @@ jobs:
       # trigger has nothing to review. Fail before the action produces an
       # obscure error, even if the caller forgot its own gate.
       - name: Reject events other than a /review PR comment
-        if: ${{ github.event_name != 'issue_comment' || !github.event.issue.pull_request || !startsWith(github.event.comment.body, '/review') }}
+        if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request.url == null || !startsWith(github.event.comment.body, '/review') }}
         env:
           EVENT_NAME: ${{ github.event_name }}
+          PR_URL: ${{ github.event.issue.pull_request.url }}
+          COMMENT: ${{ github.event.comment.body }}
         run: |
-          printf '::error::claude-code-review only supports /review comments on pull requests; got %s\n' "$EVENT_NAME" >&2
+          printf '::error::claude-code-review only supports /review comments on pull requests; got event=%s pr_url=%s comment=%s\n' "$EVENT_NAME" "${PR_URL:-}" "${COMMENT:-}" >&2
           exit 1
 
       # issue_comment still gets an OIDC token for any commenter. Fail before
