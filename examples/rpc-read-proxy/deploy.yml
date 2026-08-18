@@ -1,0 +1,19 @@
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: cloudflare-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      identity-id: ${{ vars.DOPPLER_PRODUCTION_IDENTITY_ID }}
