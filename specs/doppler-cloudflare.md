@@ -50,14 +50,14 @@ Provided controls (shared with the Vercel design):
 Not eliminated:
 
 - `CLOUDFLARE_API_TOKEN` is still a long-lived credential exposed to wrangler on the runner. Compromise is account-wide.
-- **The build runs on the runner.** Unlike Vercel remote builds, `bun install` executes third-party install scripts with the Cloudflare token present in the job environment. This is the main structural difference from the Vercel design and the reason install happens only after event checks pass. Residual risk: a compromised dependency can exfiltrate the deploy token. Mitigation is dependency hygiene (lockfiles, review of lockfile diffs), not this workflow.
+- **The build runs on the runner.** Unlike Vercel remote builds, wrangler bundles the worker on the runner, so third-party dependency code executes during the deploy. The workflow narrows the exposure: `bun install` runs before the Doppler fetch, and the credentials are read as step outputs (`inject-env-vars: false`) rather than injected into the job environment, so install scripts never see them; after the fetch, only the validate step (explicit env mapping) and the wrangler-action inputs receive them. Residual risk: dependency code that wrangler-action bundles still runs in the step that holds the token; a compromised dependency can exfiltrate it there. Mitigation is dependency hygiene (lockfiles, review of lockfile diffs), not this workflow.
 - OIDC policy is an authorization boundary only when all relevant claims are checked; identity IDs are public metadata.
 
 ## Target architecture
 
 - A small caller workflow in each worker repository invokes the SHA-pinned reusable workflow in `yearn/yearn-gha`.
 - The only supported trigger is a push to the caller repository's default branch, which runs `wrangler deploy`. Everything else is rejected before Doppler authentication.
-- The workflow fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `webops-shared-prod` / `cloudflare-deploy-configs`, validates them, installs dependencies with `bun install --frozen-lockfile` (the fleet standardizes on bun), and runs `wrangler deploy` via `cloudflare/wrangler-action` with wrangler pinned to `4.124.0`.
+- The workflow installs dependencies with `bun install --frozen-lockfile` (the fleet standardizes on bun), then fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `webops-shared-prod` / `cloudflare-deploy-configs` as step outputs, validates them, and runs `wrangler deploy` via `cloudflare/wrangler-action` with wrangler pinned to `4.124.0`.
 - Output: `deployment-url` — the production URL parsed by the action.
 
 ### Caller shape
@@ -139,7 +139,7 @@ The `job_workflow_ref` condition is mandatory — without it, any workflow in th
 Same as the Vercel guide (`specs/doppler-vercel.md` — branch protection, CODEOWNERS on `.github/workflows/**`, no `pull_request_target`, SHA-pinned actions, concurrency with cancellation). Workers-specific additions:
 
 - Pin wrangler to an exact reviewed version (`4.124.0` today); upgrade through a reviewed change.
-- Review lockfile diffs: the install step executes dependency install scripts with the deploy token in the job environment.
+- Review lockfile diffs: dependency code runs during the wrangler-action bundle step, which holds the deploy token.
 - A person who can land code on the default branch can deploy the worker. Default-branch protection is the production authorization boundary — there is no other deploy path through this workflow.
 
 ## Cloudflare controls

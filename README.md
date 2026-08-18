@@ -157,9 +157,10 @@ Do the same steps for the preview environment if needed.
 
 ## Cloudflare Workers deploy
 
-The workflow fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from
+The workflow installs dependencies with bun (`--frozen-lockfile`), fetches
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as step outputs from
 the `cloudflare-deploy-configs` config of the shared `webops-shared-prod`
-project, installs dependencies with bun (`--frozen-lockfile`), and runs
+project, and runs
 `wrangler deploy` (wrangler pinned to `4.124.0`). There is no per-app
 Doppler deploy project: the worker's identity is its name in the app
 repository's `wrangler.toml`, so the workflow takes only `identity-id`.

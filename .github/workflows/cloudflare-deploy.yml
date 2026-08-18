@@ -47,22 +47,39 @@ jobs:
 
       - name: Checkout app repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      # Deploy credentials live alone in cloudflare-deploy-configs: the
-      # action exports every secret in the config, so a broader config would
-      # pull other secrets onto the runner. Worker runtime secrets are synced
-      # to Cloudflare out of band (see specs/doppler-cloudflare.md), never
-      # through this workflow.
+      # Unlike Vercel there is no remote build: wrangler bundles the worker
+      # on the runner, so project dependencies must be installed. The fleet
+      # standardizes on bun. Install runs before the Doppler fetch so
+      # dependency install scripts never see the deploy credentials.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Deploy credentials live alone in cloudflare-deploy-configs: a broader
+      # config would pull other secrets onto the runner. The values are read
+      # as step outputs, never injected into the job environment; only the
+      # validate step (explicit env mapping) and the wrangler-action inputs
+      # receive them. Worker runtime secrets are synced to Cloudflare out of
+      # band (see specs/doppler-cloudflare.md), never through this workflow.
       - name: Load shared Cloudflare token and account ID from Doppler
+        id: doppler
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
         with:
           auth-method: oidc
           doppler-identity-id: ${{ inputs.identity-id }}
           doppler-project: ${{ env.SHARED_PROJECT }}
           doppler-config: ${{ env.DEPLOY_CONFIG }}
-          inject-env-vars: true
+          inject-env-vars: false
 
       - name: Validate Cloudflare credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           for var in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
@@ -72,20 +89,11 @@ jobs:
             fi
           done
 
-      # Unlike Vercel there is no remote build: wrangler bundles the worker
-      # on the runner, so project dependencies must be installed. The fleet
-      # standardizes on bun.
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
       - name: Deploy to Cloudflare Workers
         id: deploy
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
-          apiToken: ${{ env.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+          apiToken: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: "4.124.0"
           command: deploy
