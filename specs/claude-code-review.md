@@ -30,7 +30,7 @@ The guide distinguishes two kinds of data:
 | `id-token: write` requested for the Doppler login only; no static credential in any caller | Done |
 | SHA-pinned actions (`actions/checkout`, `anthropics/claude-code-action` `v1.0.193` / `9d7150b…`) | Done |
 | Install `review-pr-workflow` (+ `review-pr`, `npm-policy`) from `yearn/webops-skills` pinned by `WEBOPS_SKILLS_SHA` | Done |
-| Action `prompt` is a `/review-pr-workflow` invocation, not an inlined review rubric | Done |
+| Action `prompt` invokes the pinned `review-pr-workflow` skill, not an inlined review rubric | Done |
 | `--allowedTools` is read + git + lint + skill/workflow; no comment/write tools | Done |
 | Review body from `structured_output.review`; a follow-up step posts `gh pr comment` | Done |
 | PR checkout `persist-credentials: false`; one-shot extraheader fetch of `PR_BASE_REF` | Done |
@@ -62,7 +62,7 @@ Risks that remain:
 
 - A small caller workflow in each repository triggers on `issue_comment` (`types: [created]`) and invokes the SHA-pinned reusable workflow.
 - The reusable workflow owns the gates (fail closed), writes `PR_BASE_REF` from the same PR API call, checks out the PR head (`refs/pull/<n>/head`, `fetch-depth: 0`, `persist-credentials: false`), fetches the base with a one-shot `http.extraheader` basic `x-access-token`, installs `review-pr-workflow` / `review-pr` / `npm-policy` from `yearn/webops-skills` at `WEBOPS_SKILLS_SHA`, then fetches the OAuth token from Doppler over OIDC and validates it non-empty.
-- The action `prompt` is `/review-pr-workflow <repo>/pull/<n>`. Claude does not post. `--json-schema` requires a `review` string; the next step posts it with `gh pr comment`, same as `examples/test-failure-analysis.yml`. The PR head is already checked out.
+- The action `prompt` tells Claude to review the PR URL with the `review-pr-workflow` skill (plain text, not a `/` slash command — those are consumed by the action and never reach the model). Claude does not post. `--json-schema` requires a `review` string; the next step posts it with `gh pr comment`, same as `examples/test-failure-analysis.yml`. The PR head is already checked out.
 - There is no per-caller customization; the skill pin, prompt, and tool allowlist live only in the reusable workflow. Bump the skill by changing `WEBOPS_SKILLS_SHA` in a reviewed PR, same as other pins.
 
 Rejected alternatives:

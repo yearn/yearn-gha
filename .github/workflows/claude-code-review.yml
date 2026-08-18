@@ -27,10 +27,11 @@ jobs:
       WEBOPS_SKILLS_SHA: 7542ac1b57766af2e468291e2339f2a620cd7110
       # Kept out of the step expression so the text needs no quote escaping.
       DEFAULT_PROMPT: |
-        /review-pr-workflow ${{ github.repository }}/pull/${{ github.event.issue.number }}
+        Review https://github.com/${{ github.repository }}/pull/${{ github.event.issue.number }} using the review-pr-workflow skill.
 
-        The PR branch is already checked out. Do not post to GitHub.
-        Return the assembled review in the skill's Review Format as the `review` field — raw markdown, no preamble, no fence.
+        This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval.
+
+        Put the assembled review (skill Review Format, raw markdown, no preamble, no fence) in the `review` field.
       DEFAULT_CLAUDE_ARGS: |
         --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,WebFetch,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git *),Bash(bun *),Bash(npm *),Bash(pnpm *),Bash(yarn *)"
         --json-schema '{"type":"object","properties":{"review":{"type":"string","description":"Full review markdown in the skill Review Format"}},"required":["review"]}'
