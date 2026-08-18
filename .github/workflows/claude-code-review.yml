@@ -30,11 +30,12 @@ jobs:
         Review https://github.com/${{ github.repository }}/pull/${{ github.event.issue.number }} using the review-pr-workflow skill.
 
         This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval.
+        Do not start a background Workflow and wait for a notification. Run the skill in this session and finish here.
 
         Reply with the assembled review only (skill Review Format, raw markdown, no preamble, no fence).
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
-        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,WebFetch,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git *),Bash(bun *),Bash(npm *),Bash(pnpm *),Bash(yarn *)"
+        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,WebFetch,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git *),Bash(bun *),Bash(npm *),Bash(pnpm *),Bash(yarn *)"
     steps:
       # The review runs only when a PR comment starts with /review; any other
       # trigger has nothing to review. Fail before the action produces an
@@ -143,6 +144,16 @@ jobs:
           printf 'token length=%s prefix=%s\n' "${#token}" "${token:0:12}"
           echo "CLAUDE_CODE_OAUTH_TOKEN=$token" >> "$GITHUB_ENV"
 
+      - name: Comment that review started
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review started: ${RUN_URL}"
+
       - name: Run Claude code review
         id: claude
         continue-on-error: true
@@ -188,6 +199,10 @@ jobs:
           fi
           if [[ -z "$review" || "$review" == "null" ]]; then
             echo "::error::claude-code-action produced no review text" >&2
+            exit 1
+          fi
+          if grep -qiE 'wait for the workflow|waiting for .*notification' <<<"$review"; then
+            echo "::error::claude exited before assembling a review" >&2
             exit 1
           fi
           printf '%s\n' "$review" > "${RUNNER_TEMP}/review.md"
