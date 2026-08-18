@@ -159,17 +159,21 @@ It is callable only through `workflow_call` — the caller supplies the trigger 
 and authenticates with a Claude Code OAuth token resolved from Doppler via
 OIDC. No static secret lives in the caller.
 
-Reviews are on demand: a collaborator comments `/review` on a pull request,
-and the caller workflow dispatches the reusable workflow. The workflow checks
-out the PR head, installs the pinned `review-pr-workflow` skill from
-`yearn/webops-skills`, and reads the review from the action's
-result text. A follow-up step posts that body with `gh pr comment`.
-The action prompt invokes that skill; it is not an inlined rubric.
+Reviews are on demand. A collaborator comments `/review` or
+`/review-workflow` on a pull request, and the caller workflow dispatches
+the reusable workflow. The first token selects the skill:
+`/review` runs `review-pr` (single pass; better for small diffs);
+`/review-workflow` runs `review-pr-workflow` (fan-out). The workflow
+checks out the PR head, installs both skills from `yearn/webops-skills`,
+and reads the review from the action's result text. A follow-up step
+posts that body with `gh pr comment`. The action prompt is only the
+invocation plus CI constraints; it is not an inlined rubric.
 
-Anything other than a `/review` comment on a pull request fails before the
-action runs. Because `issue_comment` runs with repository secrets no matter
-who comments, only commenters with write access (owner, member, collaborator)
-are accepted, and fork pull requests are rejected.
+Anything other than a `/review` or `/review-workflow` comment on a pull
+request fails before the action runs. Because `issue_comment` runs with
+repository secrets no matter who comments, only commenters with write
+access (owner, member, collaborator) are accepted, and fork pull
+requests are rejected.
 
 Full operating guide: `specs/claude-code-review.md`.
 
@@ -223,7 +227,7 @@ in the org, and grant it read access to `webops-shared-prod` /
 `claude-review` only. Confirm `DOPPLER_IDENTITY_ID` in the reusable workflow
 matches that identity. The identity is org-trusted: any workflow in a trusted
 repo that grants `id-token: write` can fetch the token, not only this
-reusable workflow. The `/review` and fork gates bound this workflow only.
+reusable workflow. The `/review` / `/review-workflow` and fork gates bound this workflow only.
 
 To rotate, run `claude setup-token` again (requires a Claude subscription) and
 update that one Doppler secret; every caller picks up the new value on its
@@ -231,7 +235,8 @@ next run. The workflow fails fast if the token resolves empty.
 
 There are no inputs; the prompt, tool allowlist, and gates live only in the
 reusable workflow. The caller supplies the `issue_comment` trigger, permissions,
-and SHA pin. The reusable workflow checks the event, the `/review` command,
-the commenter's access, and the PR origin, and fails closed.
+and SHA pin. The reusable workflow checks the event, the `/review` or
+`/review-workflow` command, the commenter's access, and the PR origin,
+and fails closed.
 
 See `examples/claude-code-review/` for the caller.

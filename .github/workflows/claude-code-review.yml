@@ -25,30 +25,53 @@ jobs:
       DOPPLER_IDENTITY_ID: 11d2108f-ddc2-48f6-ad9c-e7fde0043741
       WEBOPS_SKILLS_REPO: yearn/webops-skills
       WEBOPS_SKILLS_SHA: 7542ac1b57766af2e468291e2339f2a620cd7110
-      # Kept out of the step expression so the text needs no quote escaping.
-      DEFAULT_PROMPT: |
-        Review https://github.com/${{ github.repository }}/pull/${{ github.event.issue.number }} using the review-pr-workflow skill.
-
-        This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval.
-        Do not start a background Workflow and wait for a notification. Run the skill in this session and finish here.
-
-        Reply with the assembled review only (skill Review Format, raw markdown, no preamble, no fence).
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
         --allowedTools "Read,Grep,Glob,Skill,Task,Agent,WebFetch,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git *),Bash(bun *),Bash(npm *),Bash(pnpm *),Bash(yarn *)"
     steps:
-      # The review runs only when a PR comment starts with /review; any other
-      # trigger has nothing to review. Fail before the action produces an
-      # obscure error, even if the caller forgot its own gate.
-      - name: Reject events other than a /review PR comment
+      # Coarse gate: only PR comments whose body starts with /review.
+      # The next step accepts only /review and /review-workflow.
+      - name: Reject events other than a review PR comment
         if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request.url == null || !startsWith(github.event.comment.body, '/review') }}
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_URL: ${{ github.event.issue.pull_request.url }}
           COMMENT: ${{ github.event.comment.body }}
         run: |
-          printf '::error::claude-code-review only supports /review comments on pull requests; got event=%s pr_url=%s comment=%s\n' "$EVENT_NAME" "${PR_URL:-}" "${COMMENT:-}" >&2
+          printf '::error::claude-code-review only supports /review or /review-workflow comments on pull requests; got event=%s pr_url=%s comment=%s\n' "$EVENT_NAME" "${PR_URL:-}" "${COMMENT:-}" >&2
           exit 1
+
+      - name: Resolve review command
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          cmd="$(printf '%s' "$COMMENT" | tr -d '\r' | awk 'NR==1 { print $1; exit }')"
+          case "$cmd" in
+            /review)
+              skill=review-pr
+              ;;
+            /review-workflow)
+              skill=review-pr-workflow
+              ;;
+            *)
+              printf '::error::claude-code-review accepts only /review or /review-workflow; got %s\n' "${cmd:-<empty>}" >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "REVIEW_SKILL=$skill"
+            echo "REVIEW_PROMPT<<PROMPT_EOF"
+            printf '%s\n' "Review https://github.com/${REPO}/pull/${PR_NUMBER} using the ${skill} skill."
+            echo
+            echo "This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval."
+            echo "Do not start a background Workflow and wait for a notification. Run the skill in this session and finish here."
+            echo
+            echo "Reply with the assembled review only (skill Review Format, raw markdown, no preamble, no fence)."
+            echo "PROMPT_EOF"
+          } >> "$GITHUB_ENV"
 
       # issue_comment still gets an OIDC token for any commenter. Fail before
       # checkout or Doppler so a drive-by /review never fetches the secret.
@@ -57,7 +80,7 @@ jobs:
         env:
           ASSOCIATION: ${{ github.event.comment.author_association }}
         run: |
-          printf '::error::claude-code-review only accepts /review from owners, members, or collaborators; got %s\n' "$ASSOCIATION" >&2
+          printf '::error::claude-code-review only accepts /review or /review-workflow from owners, members, or collaborators; got %s\n' "$ASSOCIATION" >&2
           exit 1
 
       # issue_comment carries no PR head info; resolve it and refuse fork PRs
@@ -152,7 +175,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review started: ${RUN_URL}"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review started (${REVIEW_SKILL}): ${RUN_URL}"
 
       - name: Run Claude code review
         id: claude
@@ -163,7 +186,7 @@ jobs:
           # Without an explicit token the action falls back to its Claude
           # GitHub App token, whose permissions ignore this job's block.
           github_token: ${{ github.token }}
-          prompt: ${{ env.DEFAULT_PROMPT }}
+          prompt: ${{ env.REVIEW_PROMPT }}
           claude_args: ${{ env.DEFAULT_CLAUDE_ARGS }}
 
       - name: Show Claude result envelope
