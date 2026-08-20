@@ -47,8 +47,13 @@ No outputs. No secrets.
 
 1. **Checkout** — `actions/checkout` pinned to a full SHA, with `persist-credentials: false`.
 2. **Setup Bun** — `oven-sh/setup-bun` at the pinned `bun-version`.
-3. **Install dependencies** — `bun install --frozen-lockfile`.
-4. **Lint / Format / Typecheck / Test** — one step each, guarded by a `jq` script lookup.
+3. **Cache bun install** — `actions/cache` over `~/.bun/install/cache`, keyed on the lockfile hash.
+4. **Install dependencies** — `bun install --frozen-lockfile`.
+5. **Lint / Format / Typecheck / Test** — one step each, guarded by a `jq` script lookup.
+
+The cache holds bun's global module store, not `node_modules`. `bun install` still runs and still resolves the
+lockfile; the cache only spares it the downloads. `restore-keys` lets a changed lockfile start from the previous
+run's store instead of an empty one.
 
 ### Script discovery
 
@@ -134,7 +139,9 @@ still reads `@<approved-sha>`, which is not a resolvable ref — step 1 must lan
   that. Adding the scripts is what enables the checks.
 - **Bun only.** A repository on npm, pnpm or yarn fails at `bun install --frozen-lockfile`. That is deliberate
   for a fleet that standardized on bun; add a package-manager branch when a real repository needs one.
-- **Bun installs are uncached.** No cache step was added. Revisit if install time becomes the bottleneck.
+- **The dependency cache is shared with pull-request code.** A pull request can poison `~/.bun/install/cache`
+  for later runs on the same key. The job holds no credentials and produces no artifact, so the blast radius is
+  a wrong module in a later check run. Do not share this cache key with a workflow that deploys or signs.
 
 ## References
 

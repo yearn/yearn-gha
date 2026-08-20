@@ -20,7 +20,8 @@ scripts gracefully, not fail.
 - Steps:
   1. `actions/checkout@v7` (SHA-pinned, `persist-credentials: false`).
   2. `oven-sh/setup-bun` at the pinned `bun-version`.
-  3. `bun install --frozen-lockfile`.
+  3. `actions/cache` over `~/.bun/install/cache` keyed on the lockfile hash, then
+     `bun install --frozen-lockfile`.
   4. One step per check — `lint`, `format:check`, `typecheck` (fallback `type-check`), `test` —
      each guarded: `jq -e '.scripts["<name>"] // empty | select(length > 0)' package.json` →
      run `bun run <name>`, else log "skipped".

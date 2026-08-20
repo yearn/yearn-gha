@@ -155,7 +155,7 @@ See `specs/doppler-vercel.md` for the full operating guide.
 Reusable GitHub workflow that runs lint, format, typecheck and test on pull
 requests. It handles no secrets and requests no OIDC token.
 
-The workflow installs with bun and reads the caller repository's
+The workflow installs with bun, caching bun's global module store between runs, and reads the caller repository's
 `package.json` to decide which checks exist. A check whose script is absent
 reports "skipped" instead of failing the job, so a repository that defines
 only `lint` still gets a green run. Adding a `typecheck` script is what turns
