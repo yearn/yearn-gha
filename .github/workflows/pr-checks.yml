@@ -36,8 +36,7 @@ jobs:
           for script in lint; do
             if jq -e --arg s "$script" '.scripts[$s] // empty | select(length > 0)' package.json >/dev/null; then
               echo "running bun run $script"
-              bun run "$script"
-              exit 0
+              exec bun run "$script"
             fi
           done
           echo "no lint script in package.json; skipped"
@@ -48,8 +47,7 @@ jobs:
           for script in format:check; do
             if jq -e --arg s "$script" '.scripts[$s] // empty | select(length > 0)' package.json >/dev/null; then
               echo "running bun run $script"
-              bun run "$script"
-              exit 0
+              exec bun run "$script"
             fi
           done
           echo "no format:check script in package.json; skipped"
@@ -60,8 +58,7 @@ jobs:
           for script in typecheck type-check; do
             if jq -e --arg s "$script" '.scripts[$s] // empty | select(length > 0)' package.json >/dev/null; then
               echo "running bun run $script"
-              bun run "$script"
-              exit 0
+              exec bun run "$script"
             fi
           done
           echo "no typecheck script in package.json; skipped"
@@ -72,8 +69,7 @@ jobs:
           for script in test; do
             if jq -e --arg s "$script" '.scripts[$s] // empty | select(length > 0)' package.json >/dev/null; then
               echo "running bun run $script"
-              bun run "$script"
-              exit 0
+              exec bun run "$script"
             fi
           done
           echo "no test script in package.json; skipped"
