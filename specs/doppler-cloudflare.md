@@ -43,22 +43,25 @@ Provided controls (shared with the Vercel design):
 - No static Doppler credential in GitHub; OIDC tokens are short-lived.
 - Application secrets never pass through the deploy runner.
 - The shared Cloudflare token is stored once, in one Doppler config, isolated from the Vercel credentials.
-- One trusted reusable workflow implements event checks, action pins, wrangler pin, and validation.
+- One trusted reusable workflow implements event checks, action pins, the bun pin, and validation.
 - Callers pin the reusable workflow to a full commit SHA; Doppler identities bind `job_workflow_ref` to that SHA.
 - All events except a push to the default branch are rejected before Doppler authentication. Pull requests never obtain credentials, so fork-PR and pwn-request paths never reach Doppler.
 
 Not eliminated:
 
 - `CLOUDFLARE_API_TOKEN` is still a long-lived credential exposed to wrangler on the runner. Compromise is account-wide.
-- **The build runs on the runner.** Unlike Vercel remote builds, wrangler bundles the worker on the runner, so third-party dependency code executes during the deploy. The workflow narrows the exposure: `bun install` runs before the Doppler fetch, and the credentials are read as step outputs (`inject-env-vars: false`) rather than injected into the job environment, so install scripts never see them; after the fetch, only the validate step (explicit env mapping) and the wrangler-action inputs receive them. Residual risk: dependency code that wrangler-action bundles still runs in the step that holds the token; a compromised dependency can exfiltrate it there. Mitigation is dependency hygiene (lockfiles, review of lockfile diffs), not this workflow.
+- **The build runs on the runner.** Unlike Vercel remote builds, wrangler bundles the worker on the runner, so third-party dependency code executes during the deploy. The workflow narrows the exposure: the app's own `bun install` runs before the Doppler fetch, and the credentials are read as step outputs (`inject-env-vars: false`) rather than injected into the job environment, so that install's scripts never see them; after the fetch, only the validate step (explicit env mapping) and the wrangler-action inputs receive them. The workflow also passes no `wranglerVersion`, so wrangler-action runs no install of its own in the step that holds the token. Residual risk: dependency code that wrangler-action bundles still runs in that step; a compromised dependency can exfiltrate the token there. Mitigation is dependency hygiene (lockfiles, review of lockfile diffs), not this workflow.
+- **Step ordering is not an authorization boundary.** `id-token: write` is job-scoped, so any code that runs earlier in the job can mint the same OIDC token and fetch from Doppler itself. Running the install first keeps the fetched values out of the install step's environment; it does not keep dependency code away from the credential.
 - OIDC policy is an authorization boundary only when all relevant claims are checked; identity IDs are public metadata.
 
 ## Target architecture
 
 - A small caller workflow in each worker repository invokes the SHA-pinned reusable workflow in `yearn/yearn-gha`.
 - The only supported trigger is a push to the caller repository's default branch, which runs `wrangler deploy`. Everything else is rejected before Doppler authentication.
-- The workflow installs dependencies with `bun install --frozen-lockfile` (the fleet standardizes on bun), then fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `webops-shared-prod` / `cloudflare-deploy-configs` as step outputs, validates them, and runs `wrangler deploy` via `cloudflare/wrangler-action` with wrangler pinned to `4.124.0`.
-- Output: `deployment-url` — the production URL parsed by the action.
+- The workflow installs dependencies with `bun install --frozen-lockfile` (the fleet standardizes on bun, pinned to `1.3.14` in the workflow), then fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `webops-shared-prod` / `cloudflare-deploy-configs` as step outputs, validates them, and runs `wrangler deploy` via `cloudflare/wrangler-action`. No `wranglerVersion` is passed: wrangler-action uses the wrangler the app repository already installed, so the wrangler pin is the app's lockfile.
+- **Precondition: the caller repository ships a bun lockfile** (`bun.lock` or `bun.lockb`) and a wrangler devDependency. `bun install --frozen-lockfile` fails otherwise, before Doppler is reached. `yearn/yearn-rpc-read-proxy` meets this today; `yearn/dns-bot` ships `package-lock.json` and must migrate to bun before it can call this workflow.
+- Post-deploy verification (smoke tests) stays in the caller as a `needs: deploy` job — the reusable workflow is deploy-only.
+- Output: `deployment-url` — the production URL parsed by the action. It is empty for a worker with no `workers.dev` subdomain or route, and is only the first target for a multi-route worker.
 
 ### Caller shape
 
@@ -97,7 +100,7 @@ Output: `deployment-url` (production URL).
 ### Rejected alternatives
 
 - **PR preview deploys (`wrangler versions upload`).** The fleet has no preview environment. Worker secrets are also per-worker, not per-version, so a PR preview version would run against production secrets — same-repo PR code could read them at runtime. If previews are ever wanted, add them as a separately reviewed change that confronts that risk directly.
-- **Cloudflare Pages.** The fleet's Cloudflare footprint is Workers (`yearn/dns-bot`, `yearn/yearn-rpc-read-proxy`); Cloudflare's own direction folds Pages into Workers (static assets on Workers). Doppler's managed Pages sync does not apply to Workers projects.
+- **Cloudflare Pages.** The fleet's Cloudflare footprint is Workers (`yearn/yearn-rpc-read-proxy`, and `yearn/dns-bot` once it moves to bun); Cloudflare's own direction folds Pages into Workers (static assets on Workers). Doppler's managed Pages sync does not apply to Workers projects.
 - **Per-app Cloudflare API tokens.** Cloudflare tokens scope to account/zone, not to a single worker, so per-app tokens buy little isolation at a real management cost. Revisit if Cloudflare ships per-worker token scoping.
 - **Per-app Doppler deploy project.** Nothing app-specific to store — the worker name lives in `wrangler.toml`. An empty per-app fetch is pure surface.
 - **`workflow_dispatch` manual deploys.** Same rationale as Vercel: broadens deployment authority and bypasses the event gate. Add a separately reviewed, approval-gated manual path only if an operational need emerges.
@@ -114,7 +117,7 @@ In the existing `webops-shared-prod` Doppler project, add environment / config `
 - `CLOUDFLARE_API_TOKEN`: shared account-scoped token. Cloudflare permissions: Workers Scripts Edit (plus Workers Routes Edit if workers manage routes). Set Doppler visibility to **Masked** — the fetch action registers GitHub log redaction only for values that are not Unmasked.
 - `CLOUDFLARE_ACCOUNT_ID`
 
-Keep only those two values in the config: the workflow exports every secret in it onto the runner. Do not add the Vercel credentials here, and do not add the Cloudflare credentials to the Vercel `deploy-configs`.
+Keep only those two values in the config: every value in it is fetched onto the runner as a step output. Do not add the Vercel credentials here, and do not add the Cloudflare credentials to the Vercel `deploy-configs`.
 
 ### Application project
 
@@ -136,9 +139,9 @@ The `job_workflow_ref` condition is mandatory — without it, any workflow in th
 
 ## GitHub controls
 
-Same as the Vercel guide (`specs/doppler-vercel.md` — branch protection, CODEOWNERS on `.github/workflows/**`, no `pull_request_target`, SHA-pinned actions, concurrency with cancellation). Workers-specific additions:
+Same as the Vercel guide (`specs/doppler-vercel.md` — branch protection, no `pull_request_target`, SHA-pinned actions, concurrency with cancellation). Workers-specific additions:
 
-- Pin wrangler to an exact reviewed version (`4.124.0` today); upgrade through a reviewed change.
+- Pin bun in the reusable workflow (`1.3.14` today) and wrangler in each app repository's devDependencies plus lockfile; upgrade either through a reviewed change.
 - Review lockfile diffs: dependency code runs during the wrangler-action bundle step, which holds the deploy token.
 - A person who can land code on the default branch can deploy the worker. Default-branch protection is the production authorization boundary — there is no other deploy path through this workflow.
 
@@ -153,7 +156,7 @@ Same as the Vercel guide (`specs/doppler-vercel.md` — branch protection, CODEO
 1. Put `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in `webops-shared-prod` / `cloudflare-deploy-configs`.
 2. Create the production Doppler identity. Bind subject, audience, `event_name`, `ref`, and `job_workflow_ref` to the pinned workflow SHA. Grant read only on `cloudflare-deploy-configs`.
 3. Move the worker's runtime secrets into its Doppler project and sync them with `doppler secrets --json | jq -c 'with_entries(.value = .value.computed)' | wrangler secret bulk`. Diff against the live worker before trusting the sync.
-4. Replace the repository's hand-rolled deploy workflow with the caller shape above, pin the reusable SHA, set the `DOPPLER_PRODUCTION_IDENTITY_ID` var, and remove the `CLOUDFLARE_*` GitHub secrets.
+4. Confirm the repository has a bun lockfile and a pinned wrangler devDependency; migrate off npm/yarn first if not. Then replace the hand-rolled deploy workflow with the caller shape above, pin the reusable SHA, set the `DOPPLER_PRODUCTION_IDENTITY_ID` var, and remove the `CLOUDFLARE_*` GitHub secrets. Carry any post-deploy step from the old workflow (e.g. `bun run smoke`) into a `needs: deploy` job in the caller — the reusable workflow runs nothing after `wrangler deploy`.
 5. Confirm a push to the default branch deploys, and that a pull request run fails at the event check without touching Doppler.
 
 ## References

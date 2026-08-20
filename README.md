@@ -157,13 +157,20 @@ Do the same steps for the preview environment if needed.
 
 ## Cloudflare Workers deploy
 
-The workflow installs dependencies with bun (`--frozen-lockfile`), fetches
-`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as step outputs from
-the `cloudflare-deploy-configs` config of the shared `webops-shared-prod`
-project, and runs
-`wrangler deploy` (wrangler pinned to `4.124.0`). There is no per-app
-Doppler deploy project: the worker's identity is its name in the app
-repository's `wrangler.toml`, so the workflow takes only `identity-id`.
+The workflow installs dependencies with bun (pinned to `1.3.14`,
+`--frozen-lockfile`), fetches `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` as step outputs from the `cloudflare-deploy-configs`
+config of the shared `webops-shared-prod` project, and runs
+`wrangler deploy`. No `wranglerVersion` is passed, so wrangler-action uses
+the wrangler the app repository installed — pin wrangler in the app's
+devDependencies and lockfile. There is no per-app Doppler deploy project:
+the worker's identity is its name in the app repository's `wrangler.toml`,
+so the workflow takes only `identity-id`.
+
+Callers must ship a bun lockfile and a wrangler devDependency; otherwise
+`bun install --frozen-lockfile` fails before Doppler is reached. The
+workflow is deploy-only — run smoke tests in a `needs: deploy` job in the
+caller (see `examples/rpc-read-proxy/deploy.yml`).
 
 Production only — the workers fleet has no preview environment. The only
 supported trigger is a push to the caller repository's default branch;
@@ -221,15 +228,15 @@ with Vercel callers).
 
 | Name             | Description                                              |
 | ---------------- | -------------------------------------------------------- |
-| `deployment-url` | Production URL from wrangler.                            |
+| `deployment-url` | Production URL from wrangler. Empty for a worker with no `workers.dev` subdomain or route; the first target only for a multi-route worker. |
 
 ### Doppler setup
 
 1. In `webops-shared-prod`, create the `cloudflare-deploy-configs` config
    with `CLOUDFLARE_API_TOKEN` (visibility Masked; Cloudflare permissions:
    Workers Scripts Edit) and `CLOUDFLARE_ACCOUNT_ID`. Keep ONLY those two
-   values there — the workflow exports every secret in the config onto the
-   runner.
+   values there — every value in the config is fetched onto the runner as a
+   step output.
 2. Keep each worker's runtime secrets in its own Doppler project and sync
    them with the DIY `wrangler secret bulk` flow, outside this workflow.
    The deploy identities get no access to those configs.
