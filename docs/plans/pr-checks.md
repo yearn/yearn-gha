@@ -4,7 +4,9 @@
 
 gha repo has one reusable workflow (`vercel-deploy.yml`, OIDC+Doppler, pinned actions).
 Consumer repos (e.g. yearn-practice-dummy) call it by ref. Need a matching reusable PR-check
-pipeline: run test/lint/format/typecheck only when the npm script exists, any package manager.
+pipeline: run test/lint/format/typecheck only when the npm script exists.
+
+The fleet is bun-only, so the workflow is bun-only. No package-manager detection.
 
 Dummy repo: bun (`bun.lock`), Next 16, only `lint` script today — workflow must skip missing
 scripts gracefully, not fail.
@@ -13,20 +15,15 @@ scripts gracefully, not fail.
 
 ### 1. New reusable workflow: `gha/.github/workflows/pr-checks.yml`
 
-- `on: workflow_call`, input `node-version` (default `22`), no secrets.
-- Single job `checks`, `ubuntu-latest`, `timeout-minutes: 15`.
+- `on: workflow_call`, input `bun-version` (default pinned), no secrets.
+- Single job `checks`, `ubuntu-latest`, `timeout-minutes: 15`, `permissions: contents: read`.
 - Steps:
-  1. `actions/checkout@v7` (match existing pin style).
-  2. Detect package manager from lockfile → `$PM` env:
-     `bun.lock`/`bun.lockb` → bun, `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, else npm.
-  3. Setup: `oven-sh/setup-bun` when bun; otherwise `actions/setup-node` with
-     `cache: $PM` (+ corepack enable for pnpm/yarn).
-  4. Install: frozen-lockfile variant per PM
-     (`bun install --frozen-lockfile`, `pnpm install --frozen-lockfile`,
-     `yarn --immutable`, `npm ci`).
-  5. One step per check — `lint`, `format:check`, `typecheck`
-     (fallback `type-check`), `test` — each guarded:
-     `jq -e '.scripts["<name>"]' package.json` → run `$PM run <name>`, else log "skipped".
+  1. `actions/checkout@v7` (SHA-pinned, `persist-credentials: false`).
+  2. `oven-sh/setup-bun` at the pinned `bun-version`.
+  3. `bun install --frozen-lockfile`.
+  4. One step per check — `lint`, `format:check`, `typecheck` (fallback `type-check`), `test` —
+     each guarded: `jq -e '.scripts["<name>"] // empty | select(length > 0)' package.json` →
+     run `bun run <name>`, else log "skipped".
      Separate steps keep per-check status visible in the PR UI.
 - Dummy repo has only a `lint` script, so `format`/`typecheck`/`test` report "skipped" on every PR.
   A green PR-checks run there does not mean the code typechecks; the Vercel build covers that.

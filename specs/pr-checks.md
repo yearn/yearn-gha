@@ -7,16 +7,18 @@
 
 ## Decision
 
-One reusable workflow runs the four standard checks for every web app in the fleet. It reads the repository's
-lockfile to pick a package manager and reads `package.json` to decide which checks exist. A check that the
-repository does not define reports "skipped" instead of failing the job.
+One reusable workflow runs the four standard checks for every web app in the fleet. It installs with bun and
+reads `package.json` to decide which checks exist. A check that the repository does not define reports
+"skipped" instead of failing the job.
 
 Consumers add a small caller workflow pinned to a full commit SHA, the same convention as `vercel-deploy.yml`.
 
 Two properties define the design:
 
-- **Discovery over configuration.** Callers pass no script names, no package manager, no matrix. Adding a
-  `typecheck` script to a repository is what turns the typecheck step on.
+- **Discovery over configuration.** Callers pass no script names and no matrix. Adding a `typecheck` script to
+  a repository is what turns the typecheck step on.
+- **One package manager.** The fleet standardized on bun, so the workflow runs `bun install --frozen-lockfile`
+  and `bun run <script>`. A repository without `bun.lock` fails at install, which is the intended signal.
 - **Absent is not failing.** Missing scripts are normal in this fleet. The dummy repository defines only `lint`.
 
 ## Non-goals
@@ -26,6 +28,9 @@ Two properties define the design:
 - **No secrets, no OIDC, no `id-token: write`.** This workflow runs untrusted pull-request code, so it must not
   hold credentials. Anything needing a credential belongs in the deploy workflow.
 - **No fork gate.** Fork pull requests are allowed to run checks; the workflow has nothing worth stealing.
+- **No package-manager detection.** An earlier draft picked bun, pnpm, yarn or npm from the lockfile. It carried
+  a corepack step, a conditional `setup-node` cache and four install branches to serve repositories that do not
+  exist. Adding npm or pnpm support later is a small change, and it should wait for a repository that needs it.
 
 ## Workflow shape
 
@@ -34,35 +39,16 @@ Two properties define the design:
 
 | Input | Required | Default | Description |
 | ----- | -------- | ------- | ----------- |
-| `node-version` | no | `'22'` | Node version for `actions/setup-node`. Ignored when the package manager is bun. |
+| `bun-version` | no | `'1.3.14'` | Bun release installed by `oven-sh/setup-bun`. Pinned, not `latest`. |
 
 No outputs. No secrets.
 
 ### Steps
 
 1. **Checkout** — `actions/checkout` pinned to a full SHA, with `persist-credentials: false`.
-2. **Detect package manager** — first lockfile match wins; exports `pm`/`PM` and `locked`/`LOCKED`.
-3. **Enable corepack** — pnpm and yarn only, before `setup-node`.
-4. **Setup Bun** — `oven-sh/setup-bun` at a pinned `bun-version` when the manager is bun.
-5. **Setup Node** — `actions/setup-node` otherwise; the `cache:` input is empty when no lockfile exists.
-6. **Install dependencies** — frozen-lockfile install per manager, or `npm install` when unlocked.
-7. **Lint / Format / Typecheck / Test** — one step each, guarded by a `jq` script lookup.
-
-### Package-manager detection
-
-| Lockfile | Manager | Install |
-| -------- | ------- | ------- |
-| `bun.lock` or `bun.lockb` | bun | `bun install --frozen-lockfile` |
-| `pnpm-lock.yaml` | pnpm | `pnpm install --frozen-lockfile` |
-| `yarn.lock` | yarn | `yarn install --immutable` |
-| `package-lock.json` or `npm-shrinkwrap.json` | npm | `npm ci` |
-| none | npm (`locked=false`) | `npm install` |
-
-The unlocked branch exists because both `setup-node`'s cache and `npm ci` fail hard without a lockfile. A
-repository with no committed lockfile should still get its checks, in a degraded but honest form.
-
-`corepack enable` must precede `setup-node`: the `cache: pnpm` and `cache: yarn` inputs fail when the binary is
-absent, and corepack is what installs it.
+2. **Setup Bun** — `oven-sh/setup-bun` at the pinned `bun-version`.
+3. **Install dependencies** — `bun install --frozen-lockfile`.
+4. **Lint / Format / Typecheck / Test** — one step each, guarded by a `jq` script lookup.
 
 ### Script discovery
 
@@ -76,7 +62,7 @@ Each check step resolves the first script name that exists:
 | Test | `test` | |
 
 The guard is `jq -e --arg s "$script" '.scripts[$s] // empty | select(length > 0)' package.json`. The
-`select(length > 0)` clause matters: plain `jq -e` treats `"lint": ""` as present and would run `$PM run ""`.
+`select(length > 0)` clause matters: plain `jq -e` treats `"lint": ""` as present and would run `bun run ""`.
 
 Each check is a separate step so the pull-request UI shows per-check status rather than one opaque pass/fail.
 
@@ -103,8 +89,8 @@ with whatever the runner holds. The controls follow from that:
 - `persist-credentials: false` keeps `GITHUB_TOKEN` out of `.git/config` on the runner.
 - `permissions: contents: read` at the job, nothing else. No `id-token`, no write scopes.
 - No secrets are passed by callers, so `secrets: inherit` must never appear in a caller.
-- Third-party actions are pinned to full commit SHAs; `bun-version` is pinned to an exact release rather than
-  `latest`, so a Bun release cannot change what runs without a commit here.
+- Third-party actions are pinned to full commit SHAs; `bun-version` defaults to an exact release rather than
+  `latest`, so a Bun release cannot change what runs without a commit here or a deliberate caller override.
 
 Residual risk: a malicious dependency still executes on the runner. The blast radius is a read-only checkout and
 the runner's own network access. Do not add credentials, deployment permissions, or a cache shared with trusted
@@ -146,9 +132,9 @@ still reads `@<approved-sha>`, which is not a resolvable ref — step 1 must lan
 - **The dummy repository runs one check.** It defines only `lint`, so format, typecheck, and test are skipped on
   every pull request. A green PR-checks run there does not mean the code typechecks; the Vercel build covers
   that. Adding the scripts is what enables the checks.
-- **`node-version` is ignored for bun repositories.** Documented on the input; bun supplies its own runtime.
-- **Bun installs are uncached.** `setup-node`'s cache does not cover bun and no separate cache step was added.
-  Revisit if install time becomes the bottleneck.
+- **Bun only.** A repository on npm, pnpm or yarn fails at `bun install --frozen-lockfile`. That is deliberate
+  for a fleet that standardized on bun; add a package-manager branch when a real repository needs one.
+- **Bun installs are uncached.** No cache step was added. Revisit if install time becomes the bottleneck.
 
 ## References
 
