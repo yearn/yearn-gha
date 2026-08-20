@@ -1,7 +1,8 @@
 # Reusable PR-check workflow (lint / format / typecheck / test)
 
 - **Date:** 2026-08-20
-- **Status:** Implemented in `.github/workflows/pr-checks.yml`. Not committed; consumer pins are still placeholders.
+- **Status:** Implemented and committed in `.github/workflows/pr-checks.yml`. Consumer pins (`README.md`,
+  `examples/pr-checks.yml`, and each caller) are still `<approved-sha>` placeholders.
 - **Context:** Companion to `specs/doppler-vercel.md`. That workflow deploys; this one gates the pull request.
   It handles no secrets and never authenticates to Doppler.
 
@@ -125,12 +126,12 @@ Concurrency lives in the caller so a new push supersedes an in-flight run for th
 ## Rollout
 
 1. Commit `.github/workflows/pr-checks.yml` in `yearn/yearn-gha`.
-2. Replace `<approved-sha>` in `examples/pr-checks.yml` and in each consumer's caller with that full SHA.
+2. Replace `<approved-sha>` in `README.md`, `examples/pr-checks.yml`, and each consumer's caller with that full SHA.
 3. Open a pull request on `yearn/yearn-practice-dummy`: `lint` runs; format, typecheck, and test report skipped.
 4. Add the check to branch protection once it has passed on a real pull request.
 
-Current state: the reusable workflow and the dummy caller both exist locally and are untracked. The dummy caller
-still reads `@<approved-sha>`, which is not a resolvable ref — step 1 must land before it can be pinned.
+Current state: the reusable workflow is committed; the dummy caller exists locally and is untracked. Both still
+read `@<approved-sha>`, which is not a resolvable ref — step 1 already landed, step 2 has not.
 
 ## Known limits
 
