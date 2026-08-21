@@ -164,17 +164,20 @@ Reviews are on demand. A collaborator comments `/review` or
 the reusable workflow. The first token selects the skill:
 `/review` runs `review-pr` (single pass; better for small diffs);
 `/review-workflow` runs `review-pr-workflow` (fan-out). The workflow
-checks out the PR head, installs both skills from `yearn/webops-skills`,
-and reads the review from the action's result text. A follow-up step
-posts that body with `gh pr comment`. The action prompt is only the
-invocation plus CI constraints; it is not an inlined rubric.
+checks out the PR head, installs `review-pr`, `review-pr-workflow`, and
+`npm-policy` from `yearn/webops-skills` at a pinned SHA, and reads the
+review from the action's result text. A follow-up step posts that body
+with `gh pr comment`. The action prompt is only the invocation plus CI
+constraints; it is not an inlined rubric. The tool allowlist is read-only
+(no Write/Edit, no `WebFetch`, no comment tools), and `settings` deny
+rules keep reads inside the checkout so the OAuth token in the Claude
+process environment stays unreachable.
 
 Anything other than a `/review` or `/review-workflow` comment on a pull
 request fails before the action runs. Because `issue_comment` runs with
-repository secrets no matter who comments, only commenters whose
-`author_association` is owner, member, or collaborator are accepted, and
-fork pull requests are rejected. That association is not an
-effective-permission check: it is wider than repository write access.
+repository secrets no matter who comments, only commenters with `write`,
+`maintain`, or `admin` permission are accepted, and fork pull requests
+are rejected.
 
 Full operating guide: `specs/claude-code-review.md`.
 
