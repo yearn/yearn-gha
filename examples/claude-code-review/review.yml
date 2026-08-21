@@ -12,9 +12,10 @@ permissions:
 jobs:
   review:
     # Coarse trigger filter, not a security gate: the reusable workflow keeps
-    # all four gates. It also keeps concurrency from cancelling a running
-    # review when an unrelated comment is posted.
-    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/review') }}
+    # all four gates and still enforces write access; the author_association
+    # check here is only a coarse pre-filter. It also keeps concurrency from
+    # cancelling a running review when an unrelated comment is posted.
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/review') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) }}
     concurrency:
       group: claude-review-${{ github.event.issue.number }}
       cancel-in-progress: true

@@ -27,7 +27,7 @@ jobs:
       WEBOPS_SKILLS_SHA: 7542ac1b57766af2e468291e2339f2a620cd7110
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
-        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
+        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
     steps:
       # Coarse gate: only PR comments whose body starts with /review.
       # The next step accepts only /review and /review-workflow.
@@ -200,7 +200,6 @@ jobs:
           fi
           echo "::add-mask::$token"
           printf 'token length=%s\n' "${#token}"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
 
       - name: Comment that review started
         env:
@@ -219,24 +218,33 @@ jobs:
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
         with:
-          claude_code_oauth_token: ${{ steps.token.outputs.token }}
+          claude_code_oauth_token: ${{ steps.doppler.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
           # Without an explicit token the action falls back to its Claude
           # GitHub App token, whose permissions ignore this job's block.
           github_token: ${{ github.token }}
           prompt: ${{ env.REVIEW_PROMPT }}
           claude_args: ${{ env.DEFAULT_CLAUDE_ARGS }}
           # The allowlist grants unscoped Read, which reaches the Claude
-          # process environment and with it the OAuth token. Deny everything
-          # outside the checkout.
+          # process environment and with it the OAuth token. The denies cover
+          # the paths where the token can land on disk (/proc, /sys, the
+          # runner file-command dir, .config), identically for Read, Grep,
+          # and Glob. The checkout and the installed skills stay readable.
           settings: |
             {
               "permissions": {
                 "deny": [
                   "Read(//proc/**)",
                   "Read(//sys/**)",
-                  "Read(//home/runner/**)",
+                  "Read(//home/runner/work/_temp/**)",
+                  "Read(//home/runner/.config/**)",
                   "Grep(//proc/**)",
-                  "Glob(//proc/**)"
+                  "Grep(//sys/**)",
+                  "Grep(//home/runner/work/_temp/**)",
+                  "Grep(//home/runner/.config/**)",
+                  "Glob(//proc/**)",
+                  "Glob(//sys/**)",
+                  "Glob(//home/runner/work/_temp/**)",
+                  "Glob(//home/runner/.config/**)"
                 ]
               }
             }
@@ -265,7 +273,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
-          OAUTH_TOKEN: ${{ steps.token.outputs.token }}
+          OAUTH_TOKEN: ${{ steps.doppler.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
           WORKFLOW_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
