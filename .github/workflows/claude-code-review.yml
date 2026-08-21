@@ -27,7 +27,7 @@ jobs:
       WEBOPS_SKILLS_SHA: 7542ac1b57766af2e468291e2339f2a620cd7110
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
-        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,WebFetch,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
+        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
     steps:
       # Coarse gate: only PR comments whose body starts with /review.
       # The next step accepts only /review and /review-workflow.
@@ -44,8 +44,6 @@ jobs:
       - name: Resolve review command
         env:
           COMMENT: ${{ github.event.comment.body }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.issue.number }}
         run: |
           set -euo pipefail
           cmd="$(printf '%s' "$COMMENT" | tr -d '\r' | awk 'NR==1 { print $1; exit }')"
@@ -61,25 +59,13 @@ jobs:
               exit 1
               ;;
           esac
-          {
-            echo "REVIEW_SKILL=$skill"
-            echo "REVIEW_PROMPT<<PROMPT_EOF"
-            printf '%s\n' "Review https://github.com/${REPO}/pull/${PR_NUMBER} using the ${skill} skill."
-            echo
-            echo "This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval."
-            if [[ "$skill" == "review-pr-workflow" ]]; then
-              echo "Use the Workflow tool to run the skill. Do not end the turn waiting for a notification."
-            else
-              echo "Do not start a Workflow. Run the skill in this session and finish here."
-            fi
-            echo
-            echo "Reply with the assembled review only (skill Review Format, raw markdown, no preamble, no fence)."
-            echo "PROMPT_EOF"
-          } >> "$GITHUB_ENV"
+          echo "REVIEW_SKILL=$skill" >> "$GITHUB_ENV"
 
       # issue_comment still gets an OIDC token for any commenter. Fail before
       # checkout or Doppler so a drive-by /review never fetches the secret.
-      - name: Reject commenters without write access
+      # This checks author_association, which is wider than write access:
+      # MEMBER covers every org member, COLLABORATOR includes read-only ones.
+      - name: Reject commenters outside the allowed association
         if: ${{ github.event.comment.author_association != 'OWNER' && github.event.comment.author_association != 'MEMBER' && github.event.comment.author_association != 'COLLABORATOR' }}
         env:
           ASSOCIATION: ${{ github.event.comment.author_association }}
@@ -104,6 +90,23 @@ jobs:
             exit 1
           fi
           echo "PR_BASE_REF=$base_ref" >> "$GITHUB_ENV"
+          # The prompt is built here, where the base ref is resolved: without it
+          # the skill defaults to origin/HEAD, which checkout never creates.
+          {
+            echo "REVIEW_PROMPT<<PROMPT_EOF"
+            printf '%s\n' "Review https://github.com/${REPO}/pull/${PR_NUMBER} using the ${REVIEW_SKILL} skill."
+            echo
+            echo "This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval."
+            printf '%s\n' "Diff against origin/${base_ref}."
+            if [[ "$REVIEW_SKILL" == "review-pr-workflow" ]]; then
+              echo "Use the Workflow tool to run the skill. Do not end the turn waiting for a notification."
+            else
+              echo "Do not start a Workflow. Run the skill in this session and finish here."
+            fi
+            echo
+            echo "Reply with the assembled review only (skill Review Format, raw markdown, no preamble, no fence)."
+            echo "PROMPT_EOF"
+          } >> "$GITHUB_ENV"
 
       - name: Checkout pull request
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -148,18 +151,24 @@ jobs:
           done
 
       - name: Load Claude OAuth token from Doppler
+        id: doppler
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
         with:
           auth-method: oidc
           doppler-identity-id: ${{ env.DOPPLER_IDENTITY_ID }}
           doppler-project: ${{ env.SHARED_PROJECT }}
           doppler-config: ${{ env.REVIEW_CONFIG }}
-          inject-env-vars: true
+          # Keep the credential out of the job env: an injected prompt could
+          # otherwise read it from the env file the runner writes to disk.
+          inject-env-vars: false
 
       - name: Validate Claude credentials
+        id: token
+        env:
+          RAW_TOKEN: ${{ steps.doppler.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
           set -euo pipefail
-          token="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+          token="${RAW_TOKEN:-}"
           token="${token//$'\r'/}"
           token="${token//$'\n'/}"
           token="${token#\"}"
@@ -168,8 +177,9 @@ jobs:
             echo "::error::CLAUDE_CODE_OAUTH_TOKEN must resolve from Doppler" >&2
             exit 1
           fi
-          printf 'token length=%s prefix=%s\n' "${#token}" "${token:0:12}"
-          echo "CLAUDE_CODE_OAUTH_TOKEN=$token" >> "$GITHUB_ENV"
+          echo "::add-mask::$token"
+          printf 'token length=%s\n' "${#token}"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
 
       - name: Comment that review started
         env:
@@ -188,7 +198,7 @@ jobs:
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
         with:
-          claude_code_oauth_token: ${{ env.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ steps.token.outputs.token }}
           # Without an explicit token the action falls back to its Claude
           # GitHub App token, whose permissions ignore this job's block.
           github_token: ${{ github.token }}
@@ -197,9 +207,12 @@ jobs:
 
       - name: Show Claude result envelope
         if: steps.claude.outcome == 'success' || steps.claude.outcome == 'failure'
+        continue-on-error: true
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           set -euo pipefail
-          f="${{ steps.claude.outputs.execution_file }}"
+          f="${EXEC_FILE:-}"
           if [[ -z "$f" || ! -f "$f" ]]; then
             f="${RUNNER_TEMP}/claude-execution-output.json"
           fi
@@ -215,23 +228,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
-          OUTPUT: ${{ steps.claude.outputs.structured_output }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           set -euo pipefail
           review=""
-          if [[ -n "${OUTPUT:-}" ]]; then
-            review="$(printf '%s\n' "$OUTPUT" | jq -r '.review // empty')"
-          fi
-          if [[ -z "$review" || "$review" == "null" ]] && [[ -n "${EXEC_FILE:-}" && -f "$EXEC_FILE" ]]; then
-            review="$(jq -r '[.[] | select(.type=="result") | .result // empty] | last // empty' "$EXEC_FILE")"
+          if [[ -n "${EXEC_FILE:-}" && -f "$EXEC_FILE" ]]; then
+            review="$(jq -r '[.[] | select(.type=="result" and (.is_error != true)) | .result // empty] | last // empty' "$EXEC_FILE")"
           fi
           if [[ -z "$review" || "$review" == "null" ]]; then
             echo "::error::claude-code-action produced no review text" >&2
-            exit 1
-          fi
-          if grep -qiE 'wait for the workflow|waiting for .*notification' <<<"$review"; then
-            echo "::error::claude exited before assembling a review" >&2
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review failed: ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
             exit 1
           fi
           printf '%s\n' "$review" > "${RUNNER_TEMP}/review.md"

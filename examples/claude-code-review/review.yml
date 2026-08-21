@@ -4,10 +4,6 @@ on:
   issue_comment:
     types: [created]
 
-concurrency:
-  group: claude-review-${{ github.event.issue.number }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   id-token: write
@@ -15,4 +11,11 @@ permissions:
 
 jobs:
   review:
+    # Coarse trigger filter, not a security gate: the reusable workflow keeps
+    # all four gates. It also keeps concurrency from cancelling a running
+    # review when an unrelated comment is posted.
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/review') }}
+    concurrency:
+      group: claude-review-${{ github.event.issue.number }}
+      cancel-in-progress: true
     uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # pin to the approved full commit SHA

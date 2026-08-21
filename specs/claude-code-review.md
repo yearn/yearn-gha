@@ -8,7 +8,7 @@
 
 GitHub Actions runs an on-demand Claude review on pull requests through the reusable workflow. A collaborator comments `/review` or `/review-workflow` on a PR; the caller workflow (triggered by `issue_comment`) dispatches the reusable workflow. The first token of the comment selects the skill: `/review` invokes `review-pr` (single pass; better for small diffs), `/review-workflow` invokes `review-pr-workflow` (fan-out). The workflow wraps [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) and is callable only through `workflow_call` — the caller supplies the trigger, the reusable workflow supplies the implementation, pins, and guards.
 
-Authentication uses a **Claude Code OAuth token** (`claude setup-token`), not an Anthropic API key. The token is stored once in Doppler — `webops-shared-prod`, config `claude-review` — and fetched at run time: the workflow authenticates to Doppler as a service-account identity with the GitHub Actions OIDC token and injects the secret into the job env. Callers pass no secret at all; they only grant `id-token: write`. The workflow fails fast when the token resolves empty, so a misconfigured identity or config stops the run before the action executes.
+Authentication uses a **Claude Code OAuth token** (`claude setup-token`), not an Anthropic API key. The token is stored once in Doppler — `webops-shared-prod`, config `claude-review` — and fetched at run time: the workflow authenticates to Doppler as a service-account identity with the GitHub Actions OIDC token. The fetch runs with `inject-env-vars: false`, so the credential never enters the job env; one step reads it from the fetch step output, masks it, and passes it to the action as `claude_code_oauth_token`. Callers pass no secret at all; they only grant `id-token: write`. The workflow fails fast when the token resolves empty, so a misconfigured identity or config stops the run before the action executes.
 
 The token gets its own config because the fetch action exports every secret in a config onto the runner: sharing `deploy-configs` would put `VERCEL_TOKEN` on review runners and the OAuth token on deploy runners.
 
@@ -23,7 +23,7 @@ The guide distinguishes two kinds of data:
 | ------- | ------ |
 | `workflow_call` only — no direct trigger in the reusable workflow | Done |
 | Reject anything that is not a `/review` or `/review-workflow` comment on a PR before the action runs | Done |
-| Reject commenters without write access (owner/member/collaborator) | Done |
+| Reject commenters whose `author_association` is not owner, member, or collaborator | Done |
 | Reject fork PRs (head repo resolved via API) before the action runs | Done |
 | Fetch `CLAUDE_CODE_OAUTH_TOKEN` from Doppler over OIDC (SHA-pinned `dopplerhq/secrets-fetch-action` `v2.0.0` / `451892f…`), after the event and fork gates | Done |
 | Validate `CLAUDE_CODE_OAUTH_TOKEN` non-empty after the Doppler fetch and before the action runs | Done |
@@ -44,8 +44,8 @@ Remaining work is **operational**: create the Doppler identity and the `claude-r
 
 Controls provided:
 
-- One reviewed implementation of event gates, pins, skill invocation, and tool allowlist. There are no inputs, so callers cannot widen the action's tool access at all. `--allowedTools` covers Read/Grep/Glob/Skill/Task/Agent/Workflow/WebFetch, read-only `gh` prefixes, named git verbs (`diff`/`log`/`show`/`status`/`rev-parse`/`merge-base`/`ls-files`), and lint-only package-manager invocations — not Write/Edit, and not `gh pr comment`. The comment is posted by a later step from the action result text.
-- Anything that is not a `/review` or `/review-workflow` PR comment from a commenter with write access on a same-repo PR fails before the action executes, so the token is never exercised outside the intended context. Unlike `pull_request`, `issue_comment` runs with repository secrets regardless of who comments — the author-association and fork guards are what stand between a drive-by commenter and the token.
+- One reviewed implementation of event gates, pins, skill invocation, and tool allowlist. There are no inputs, so callers cannot widen the action's tool access at all. `--allowedTools` covers Read/Grep/Glob/Skill/Task/Agent/Workflow, read-only `gh` prefixes, named git verbs (`diff`/`log`/`show`/`status`/`rev-parse`/`merge-base`/`ls-files`), and lint-only package-manager invocations — not Write/Edit, not `WebFetch`, and not `gh pr comment`. `WebFetch` is excluded on purpose: with unscoped `Read` in the allowlist, network egress turns any file the runner writes into an exfiltration path. The comment is posted by a later step from the action result text.
+- Anything that is not a `/review` or `/review-workflow` PR comment from a commenter whose `author_association` is owner, member, or collaborator on a same-repo PR fails before the action executes, so the token is never exercised outside the intended context. Unlike `pull_request`, `issue_comment` runs with repository secrets regardless of who comments — the author-association and fork guards are what stand between a drive-by commenter and the token.
 - Full-SHA pins on both the action and the reusable workflow prevent a moved tag from silently changing executed code.
 - The workflow requests only `contents: read`, `pull-requests: write`, and `id-token: write`, and passes its own `github.token` to the action, so GitHub operations are bounded by those permissions. `id-token: write` serves the Doppler login alone; the pinned action's own OIDC federation path stays unused.
 - No caller repository stores the review credential. The token exists in one Doppler config, read by one identity, and reaches a runner only for the duration of a run.
@@ -54,15 +54,15 @@ Risks that remain:
 
 - `CLAUDE_CODE_OAUTH_TOKEN` is a long-lived credential on the runner for the duration of the run. The Doppler fetch is short-lived, the token it returns is not; there is no OIDC equivalent for the Claude credential itself today. Storage and rotation are now centralized (one Doppler secret, `claude setup-token` again). **Accepted risk — state it plainly:** a compromised run can read the token.
 - The Doppler identity trusts every caller repository in the org, so any workflow in any org repository can authenticate as it and fetch the token directly — not only this reusable workflow. **Accepted risk — state it plainly:** the workflow's gates bound what this workflow does with the token, not who else in the org can read it.
-- Claude reads the PR and may run named git verbs plus project lint on the checked-out PR head. Those lint scripts are PR-controlled. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips credential env vars from Bash subprocesses; a malicious lint script can still run without those vars. A malicious same-repo PR can still prompt-inject. **Residual risk — state it plainly.** Push is blocked by `contents: read` (checkout also uses `persist-credentials: false`). It cannot merge.
-- The commenter gate trusts `author_association`. Owners, members, and collaborators can spend review tokens at will; there is no rate limit beyond per-PR concurrency cancellation in the caller.
+- Claude reads the PR and may run named git verbs plus project lint on the checked-out PR head. Those lint scripts are PR-controlled. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips credential env vars from Bash subprocesses, and the OAuth token is never written to the job env or any command file, so a prompt-injected `Read` cannot recover it. A malicious lint script still runs, and a malicious same-repo PR can still prompt-inject. **Residual risk — state it plainly.** Push is blocked by `contents: read` (checkout also uses `persist-credentials: false`). It cannot merge.
+- The commenter gate trusts `author_association`, which is not an effective-permission check: `MEMBER` covers every org member and `COLLABORATOR` includes read-only collaborators. That group is wider than repository write access, and everyone in it can spend review tokens at will; there is no rate limit beyond per-PR concurrency cancellation in the caller.
 - Review comments are advisory. The workflow is not a required check and must not gate merges; Claude review does not replace human review.
 
 ## Target architecture
 
 - A small caller workflow in each repository triggers on `issue_comment` (`types: [created]`) and invokes the SHA-pinned reusable workflow.
 - The reusable workflow owns the gates (fail closed), writes `PR_BASE_REF` from the same PR API call, checks out the PR head (`refs/pull/<n>/head`, `fetch-depth: 0`, `persist-credentials: false`), fetches the base with a one-shot `http.extraheader` basic `x-access-token`, installs `review-pr-workflow` / `review-pr` / `npm-policy` from `yearn/webops-skills` at `WEBOPS_SKILLS_SHA`, then fetches the OAuth token from Doppler over OIDC and validates it non-empty.
-- The first token of the comment selects the skill: `/review` → `review-pr`, `/review-workflow` → `review-pr-workflow`. Any other first token fails before Doppler. The action `prompt` tells Claude to review the PR URL with that skill (plain text, not a `/` slash command — those are consumed by the action and never reach the model). `/review-workflow` is told to use the `Workflow` tool; `/review` is told not to. Skills are copied into `~/.claude/skills` and loaded with `--setting-sources user` so the action's untrusted-PR `.claude` snapshot cannot replace them. Claude does not post. `--json-schema` is not used (it fails the action when the run errors, and skills often skip `structured_output`). The next step posts the result text with `gh pr comment`. The PR head is already checked out.
+- The first token of the comment selects the skill: `/review` → `review-pr`, `/review-workflow` → `review-pr-workflow`. Any other first token fails before Doppler. The action `prompt` is built in the fork gate, after `PR_BASE_REF` is resolved, and names that base explicitly (`Diff against origin/<base>.`) — the skills otherwise default to `origin/HEAD`, which `actions/checkout` never creates, and a fan-out lens would review the diff against nothing. The prompt tells Claude to review the PR URL with the selected skill (plain text, not a `/` slash command — those are consumed by the action and never reach the model). `/review-workflow` is told to use the `Workflow` tool; `/review` is told not to. Skills are copied into `~/.claude/skills` and loaded with `--setting-sources user` so the action's untrusted-PR `.claude` snapshot cannot replace them. Claude does not post. `--json-schema` is not used (it fails the action when the run errors, and skills often skip `structured_output`), so the review text comes only from the last non-error `result` record in the execution file. The next step posts it with `gh pr comment`, or comments a run link when there is no usable review. The PR head is already checked out.
 - There is no per-caller customization; the skill pin, prompt, and tool allowlist live only in the reusable workflow. Bump the skill by changing `WEBOPS_SKILLS_SHA` in a reviewed PR, same as other pins.
 
 Rejected alternatives:
@@ -85,10 +85,6 @@ on:
   issue_comment:
     types: [created]
 
-concurrency:
-  group: claude-review-${{ github.event.issue.number }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   id-token: write
@@ -96,10 +92,14 @@ permissions:
 
 jobs:
   review:
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/review') }}
+    concurrency:
+      group: claude-review-${{ github.event.issue.number }}
+      cancel-in-progress: true
     uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # full commit SHA only
 ```
 
-`concurrency` groups by PR number (`issue_comment` runs on the default branch ref, so `github.ref` cannot tell PRs apart); cancellation makes a newer `/review` or `/review-workflow` supersede an in-flight review of the same PR.
+`concurrency` sits on the job, behind a coarse trigger filter. Workflow-level concurrency is claimed when the run is queued — before the reusable workflow's gates run — so any comment on the PR would cancel a review in flight. The `if` is a trigger filter, not a security gate: all four gates stay in the reusable workflow and still fail closed. `concurrency` groups by PR number (`issue_comment` runs on the default branch ref, so `github.ref` cannot tell PRs apart); cancellation makes a newer `/review` or `/review-workflow` supersede an in-flight review of the same PR.
 
 ### Workflow inputs and secrets
 

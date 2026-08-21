@@ -171,9 +171,10 @@ invocation plus CI constraints; it is not an inlined rubric.
 
 Anything other than a `/review` or `/review-workflow` comment on a pull
 request fails before the action runs. Because `issue_comment` runs with
-repository secrets no matter who comments, only commenters with write
-access (owner, member, collaborator) are accepted, and fork pull
-requests are rejected.
+repository secrets no matter who comments, only commenters whose
+`author_association` is owner, member, or collaborator are accepted, and
+fork pull requests are rejected. That association is not an
+effective-permission check: it is wider than repository write access.
 
 Full operating guide: `specs/claude-code-review.md`.
 
@@ -186,10 +187,6 @@ on:
   issue_comment:
     types: [created]
 
-concurrency:
-  group: claude-review-${{ github.event.issue.number }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   id-token: write
@@ -197,6 +194,10 @@ permissions:
 
 jobs:
   review:
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/review') }}
+    concurrency:
+      group: claude-review-${{ github.event.issue.number }}
+      cancel-in-progress: true
     uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # pin to the approved full commit SHA
 ```
 
