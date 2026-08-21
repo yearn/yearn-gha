@@ -107,6 +107,9 @@ jobs:
           vercel-org-id: ${{ env.VERCEL_ORG_ID }}
           vercel-project-id: ${{ env.VERCEL_PROJECT_ID }}
           vercel-version: 55.0.0
+          # The action keys its PR comment on this name; without it multi-project
+          # callers collide on one comment and only the last URL survives.
+          vercel-project-name: ${{ inputs.project }}
           # CLI mode does not forward `target`; --prod is what promotes the
           # deployment. The build runs on Vercel with its synced env vars.
           vercel-args: ${{ env.DEPLOY_ENV == 'production' && '--prod' || '' }}
