@@ -27,7 +27,7 @@ jobs:
       WEBOPS_SKILLS_SHA: 7542ac1b57766af2e468291e2339f2a620cd7110
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
-        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
+        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,TaskOutput,TaskStop,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
     steps:
       # Coarse gate: only PR comments whose body starts with /review.
       # The next step accepts only /review and /review-workflow.
@@ -138,7 +138,9 @@ jobs:
             printf '%s\n' "Diff against ${base_sha}."
             echo "There is no network access and no browser: skip visual verification, and report npm-policy size or maintenance lookups as \"not verifiable in CI\" rather than estimating them."
             if [[ "$REVIEW_SKILL" == "review-pr-workflow" ]]; then
-              echo "Use the Workflow tool to run the skill. Do not end the turn waiting for a notification."
+              echo "Use the Workflow tool to run the skill. It returns a task id and runs in the background."
+              echo "Then call TaskOutput on that id with block=true and timeout=600000, repeating until it reports the workflow finished, and assemble the review from its result."
+              echo "Your final reply must contain the assembled review; never end the turn while the workflow is still running."
             else
               echo "Do not start a Workflow. Run the skill in this session and finish here."
             fi
