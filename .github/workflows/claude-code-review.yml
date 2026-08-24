@@ -201,6 +201,7 @@ jobs:
             exit 1
           fi
           echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
           printf 'token length=%s\n' "${#token}"
 
       - name: Comment that review started
@@ -228,7 +229,7 @@ jobs:
           CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
         with:
-          claude_code_oauth_token: ${{ steps.doppler.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ steps.token.outputs.token }}
           # Without an explicit token the action falls back to its Claude
           # GitHub App token, whose permissions ignore this job's block.
           github_token: ${{ github.token }}
@@ -283,7 +284,7 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
-          OAUTH_TOKEN: ${{ steps.doppler.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+          OAUTH_TOKEN: ${{ steps.token.outputs.token }}
           WORKFLOW_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -298,7 +299,9 @@ jobs:
             gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review failed: ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
             exit 1
           fi
-          if [[ "$review" == *"$OAUTH_TOKEN"* || "$review" == *"$WORKFLOW_TOKEN"* ]]; then
+          b64_oauth="$(printf '%s' "$OAUTH_TOKEN" | base64 -w0)"
+          b64_workflow="$(printf '%s' "$WORKFLOW_TOKEN" | base64 -w0)"
+          if [[ "$review" == *"$OAUTH_TOKEN"* || "$review" == *"$WORKFLOW_TOKEN"* || "$review" == *"$b64_oauth"* || "$review" == *"$b64_workflow"* ]]; then
             echo "::error::review body contains credential material; not posting" >&2
             gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review failed: ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
             exit 1
