@@ -224,8 +224,12 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends bubblewrap socat
-          command -v bwrap
+          # ubuntu-24.04 blocks unprivileged user namespaces via AppArmor, so
+          # bwrap fails with "setting up uid map: Permission denied" and every
+          # Bash command dies inside the sandbox.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v socat
+          bwrap --dev-bind / / --unshare-pid true
 
       - name: Run Claude code review
         id: claude
