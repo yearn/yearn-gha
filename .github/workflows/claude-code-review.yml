@@ -215,12 +215,17 @@ jobs:
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review started (${REVIEW_SKILL}): ${RUN_URL}"
 
       # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB makes the CLI refuse to start without
-      # bubblewrap, which the runner image does not ship.
-      - name: Install bubblewrap
+      # bubblewrap (PID namespace), and its sandbox also needs socat before it
+      # will initialize Bash. Neither ships in the runner image; without socat
+      # the run continues with no Bash tool at all, so lint and the named git
+      # verbs silently never execute.
+      - name: Install sandbox dependencies
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          command -v bwrap
+          command -v socat
 
       - name: Run Claude code review
         id: claude
