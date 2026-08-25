@@ -169,10 +169,15 @@ checks out the PR head, installs `review-pr`, `review-pr-workflow`, and
 review from the action's result text. A follow-up step posts that body
 with `gh pr comment`. The action prompt is only the invocation plus CI
 constraints; it is not an inlined rubric. The tool allowlist is read-only
-(no Write/Edit, no `WebFetch`, no comment tools), and `settings` deny
-rules cover the on-disk locations of the OAuth token (`/proc`, `/sys`,
-the runner file-command directory, `.config`) identically for `Read`,
-`Grep`, and `Glob`.
+(no Write/Edit, no `WebFetch`, no comment tools). Two controls cover
+credential material on disk: the built-in Bash sandbox (enabled in
+`settings`) confines every Bash command and child process — it denies
+writes to `.git/config` and `.git/hooks`, strips `GITHUB_TOKEN`/`GH_TOKEN`
+from subprocesses, and blocks all network access — while `settings` deny
+rules keep Claude's own `Read`/`Grep`/`Glob` out of `/proc`, `/sys`, the
+runner file-command directory, `.config`, and the checkout's `.git`
+directory (the pinned action writes an authenticated remote URL into
+`.git/config` before Claude starts).
 
 Anything other than a `/review` or `/review-workflow` comment on a pull
 request fails before the action runs. Because `issue_comment` runs with

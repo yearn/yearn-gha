@@ -215,11 +215,11 @@ jobs:
           set -euo pipefail
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review started (${REVIEW_SKILL}): ${RUN_URL}"
 
-      # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB makes the CLI refuse to start without
-      # bubblewrap (PID namespace), and its sandbox also needs socat before it
-      # will initialize Bash. Neither ships in the runner image; without socat
-      # the run continues with no Bash tool at all, so lint and the named git
-      # verbs silently never execute.
+      # The built-in Bash sandbox (sandbox.enabled in the settings file) needs
+      # bubblewrap for its namespaces and socat before it will initialize Bash.
+      # Neither ships in the runner image; without socat the run continues with
+      # no Bash tool at all, so lint and the named git verbs silently never
+      # execute.
       - name: Install sandbox dependencies
         run: |
           set -euo pipefail
@@ -230,13 +230,10 @@ jobs:
           # Bash command dies inside the sandbox.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v socat
-          bwrap --dev-bind / / --unshare-pid true
 
       - name: Run Claude code review
         id: claude
         continue-on-error: true
-        env:
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
         uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
         with:
           claude_code_oauth_token: ${{ steps.token.outputs.token }}
@@ -245,30 +242,7 @@ jobs:
           github_token: ${{ github.token }}
           prompt: ${{ env.REVIEW_PROMPT }}
           claude_args: ${{ env.DEFAULT_CLAUDE_ARGS }}
-          # The allowlist grants unscoped Read, which reaches the Claude
-          # process environment and with it the OAuth token. The denies cover
-          # the paths where the token can land on disk (/proc, /sys, the
-          # runner file-command dir, .config), identically for Read, Grep,
-          # and Glob. The checkout and the installed skills stay readable.
-          settings: |
-            {
-              "permissions": {
-                "deny": [
-                  "Read(//proc/**)",
-                  "Read(//sys/**)",
-                  "Read(//home/runner/work/_temp/**)",
-                  "Read(//home/runner/.config/**)",
-                  "Grep(//proc/**)",
-                  "Grep(//sys/**)",
-                  "Grep(//home/runner/work/_temp/**)",
-                  "Grep(//home/runner/.config/**)",
-                  "Glob(//proc/**)",
-                  "Glob(//sys/**)",
-                  "Glob(//home/runner/work/_temp/**)",
-                  "Glob(//home/runner/.config/**)"
-                ]
-              }
-            }
+          settings: .github/workflows/claude-sandbox-config.json
 
       # Both closing steps run whenever the started comment posted, even if a
       # later step failed before the Claude step: a sandbox-install failure
