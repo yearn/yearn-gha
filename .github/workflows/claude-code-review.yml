@@ -252,11 +252,18 @@ jobs:
                 "allowUnsandboxedCommands": false,
                 "filesystem": {
                   "denyRead": [
-                    "/home/runner/work/_temp",
-                    "/home/runner/work/**/.git/config"
+                    "/home/runner/work/_temp"
                   ]
                 },
                 "credentials": {
+                  "files": [
+                    {
+                      "path": "${{ github.workspace }}/.git/config",
+                      "mode": "mask",
+                      "extract": "x-access-token:([^@]+)@",
+                      "onExtractNoMatch": "deny"
+                    }
+                  ],
                   "envVars": [
                     { "name": "GITHUB_TOKEN", "mode": "deny" },
                     { "name": "GH_TOKEN", "mode": "deny" }
