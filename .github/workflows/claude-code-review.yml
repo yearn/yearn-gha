@@ -242,7 +242,48 @@ jobs:
           github_token: ${{ github.token }}
           prompt: ${{ env.REVIEW_PROMPT }}
           claude_args: ${{ env.DEFAULT_CLAUDE_ARGS }}
-          settings: .github/workflows/claude-sandbox-config.json
+          # Inline JSON, not a path: the action resolves a settings path against
+          # the caller repository's workspace, where this reusable workflow's
+          # own files are not checked out.
+          settings: |
+            {
+              "sandbox": {
+                "enabled": true,
+                "allowUnsandboxedCommands": false,
+                "filesystem": {
+                  "denyRead": [
+                    "/home/runner/work/_temp",
+                    "/home/runner/work/**/.git/config"
+                  ]
+                },
+                "credentials": {
+                  "envVars": [
+                    { "name": "GITHUB_TOKEN", "mode": "deny" },
+                    { "name": "GH_TOKEN", "mode": "deny" }
+                  ]
+                },
+                "network": { "strictAllowlist": true, "allowedDomains": [] }
+              },
+              "permissions": {
+                "deny": [
+                  "Read(//home/runner/work/**/.git/**)",
+                  "Grep(//home/runner/work/**/.git/**)",
+                  "Glob(//home/runner/work/**/.git/**)",
+                  "Read(//proc/**)",
+                  "Read(//sys/**)",
+                  "Read(//home/runner/work/_temp/**)",
+                  "Read(//home/runner/.config/**)",
+                  "Grep(//proc/**)",
+                  "Grep(//sys/**)",
+                  "Grep(//home/runner/work/_temp/**)",
+                  "Grep(//home/runner/.config/**)",
+                  "Glob(//proc/**)",
+                  "Glob(//sys/**)",
+                  "Glob(//home/runner/work/_temp/**)",
+                  "Glob(//home/runner/.config/**)"
+                ]
+              }
+            }
 
       # Both closing steps run whenever the started comment posted, even if a
       # later step failed before the Claude step: a sandbox-install failure
