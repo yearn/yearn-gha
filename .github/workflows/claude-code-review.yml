@@ -275,9 +275,6 @@ jobs:
               },
               "permissions": {
                 "deny": [
-                  "Read(//home/runner/work/**/.git/**)",
-                  "Grep(//home/runner/work/**/.git/**)",
-                  "Glob(//home/runner/work/**/.git/**)",
                   "Read(//proc/**)",
                   "Read(//sys/**)",
                   "Read(//home/runner/work/_temp/**)",
