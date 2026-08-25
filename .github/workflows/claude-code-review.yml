@@ -205,6 +205,7 @@ jobs:
           printf 'token length=%s\n' "${#token}"
 
       - name: Comment that review started
+        id: start-comment
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -269,8 +270,13 @@ jobs:
               }
             }
 
+      # Both closing steps run whenever the started comment posted, even if a
+      # later step failed before the Claude step: a sandbox-install failure
+      # must still resolve "Review started" with a failure comment. Gate
+      # rejections happen before the started comment, so they post nothing;
+      # !cancelled() keeps a superseded (cancelled) run silent.
       - name: Show Claude result envelope
-        if: steps.claude.outcome == 'success' || steps.claude.outcome == 'failure'
+        if: ${{ !cancelled() && steps.start-comment.outcome == 'success' }}
         continue-on-error: true
         env:
           EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
@@ -284,10 +290,13 @@ jobs:
             echo "::error::no claude-execution-output.json" >&2
             exit 1
           fi
-          jq '[.[] | select(.type=="result")] | last | {subtype, is_error, errors, stop_reason, result, total_cost_usd, num_turns}' "$f"
+          # No `result` here: the raw review text only surfaces through the
+          # posting step below, after its credential check. GitHub log masking
+          # is verbatim-only, so an encoded token in the text would print.
+          jq '[.[] | select(.type=="result")] | last | {subtype, is_error, errors, stop_reason, total_cost_usd, num_turns}' "$f"
 
       - name: Comment on PR
-        if: steps.claude.outcome == 'success' || steps.claude.outcome == 'failure'
+        if: ${{ !cancelled() && steps.start-comment.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

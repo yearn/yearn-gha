@@ -36,8 +36,8 @@ The guide distinguishes two kinds of data:
 | Prompt states there is no network or browser: skip visual verification, report npm-policy lookups as not verifiable in CI | Done |
 | Review body from the action result text; a follow-up step posts `gh pr comment` | Done |
 | Acknowledgement comment (`Review started (<skill>): <run url>`) after the token validates and before the action runs | Done |
-| Result envelope (`subtype`, `is_error`, `stop_reason`, cost, turns) echoed to the job log after the action was attempted | Done |
-| Failure comment (`Review failed: <run url>`) when the action produced no result text, when the execution file cannot be parsed, or when the body contains credential material | Done |
+| Result envelope (`subtype`, `is_error`, `errors`, `stop_reason`, cost, turns — never `result`: log masking is verbatim-only, so an encoded token in the review text would print) echoed to the job log | Done |
+| Failure comment (`Review failed: <run url>`) when any step after the started comment fails — including before the action runs — when the action produced no result text, when the execution file cannot be parsed, or when the body contains credential material; cancelled (superseded) runs stay silent | Done |
 | PR checkout `persist-credentials: false`; one-shot extraheader fetch of `PR_BASE_REF` | Done |
 | Explicit `github_token: ${{ github.token }}` so the action cannot fall back to its Claude App token | Done |
 | Caller examples pin reusable workflow to full commit SHA | Done (examples use the `@<approved-sha>` placeholder; replace at rollout) |
@@ -49,7 +49,7 @@ Remaining work is **operational**: create the Doppler identity and the `claude-r
 
 Controls provided:
 
-- One reviewed implementation of event gates, pins, skill invocation, and tool allowlist. There are no inputs, so callers cannot widen the action's tool access at all. `--allowedTools` covers Read/Grep/Glob/Skill/Task/Agent/Workflow/TaskOutput/TaskStop/TaskStop, read-only `gh` prefixes, named git verbs (`log`/`show`/`status`/`rev-parse`/`merge-base`/`ls-files`), and lint-only package-manager invocations — not Write/Edit, not `WebFetch`, and not `gh pr comment`. `WebFetch` is excluded on purpose: with unscoped `Read` in the allowlist, network egress turns any file the runner writes into an exfiltration path. The comment is posted by a later step from the action result text.
+- One reviewed implementation of event gates, pins, skill invocation, and tool allowlist. There are no inputs, so callers cannot widen the action's tool access at all. `--allowedTools` covers Read/Grep/Glob/Skill/Task/Agent/Workflow/TaskOutput/TaskStop, read-only `gh` prefixes, named git verbs (`log`/`show`/`status`/`rev-parse`/`merge-base`/`ls-files`), and lint-only package-manager invocations — not Write/Edit, not `WebFetch`, and not `gh pr comment`. `WebFetch` is excluded on purpose: with unscoped `Read` in the allowlist, network egress turns any file the runner writes into an exfiltration path. The comment is posted by a later step from the action result text.
 - Anything that is not a `/review` or `/review-workflow` PR comment from a commenter with `write`, `maintain`, or `admin` permission on a same-repo PR fails before the action executes, so the token is never exercised outside the intended context. Unlike `pull_request`, `issue_comment` runs with repository secrets regardless of who comments — the write-permission and fork guards are what stand between a drive-by commenter and the token.
 - Full-SHA pins on both the action and the reusable workflow prevent a moved tag from silently changing executed code.
 - The workflow requests only `contents: read`, `pull-requests: write`, and `id-token: write`, and passes its own `github.token` to the action, so GitHub operations are bounded by those permissions. `id-token: write` serves the Doppler login alone; the pinned action's own OIDC federation path stays unused.
@@ -59,7 +59,7 @@ Risks that remain:
 
 - `CLAUDE_CODE_OAUTH_TOKEN` is a long-lived credential on the runner for the duration of the run. The Doppler fetch is short-lived, the token it returns is not; there is no OIDC equivalent for the Claude credential itself today. Storage and rotation are now centralized (one Doppler secret, `claude setup-token` again). **Accepted risk — state it plainly:** a compromised run can read the token.
 - The Doppler identity trusts every caller repository in the org, so any workflow in any org repository can authenticate as it and fetch the token directly — not only this reusable workflow. **Accepted risk — state it plainly:** the workflow's gates bound what this workflow does with the token, not who else in the org can read it.
-- Claude reads the PR and runs named git verbs on the checked-out PR head. Project lint is allowlisted but usually cannot run: the workflow deliberately does not install dependencies (an install would execute PR-controlled lifecycle scripts on a runner holding the token), so lint executes only where a caller repository already has its dependencies on disk, and the review reports it as not verifiable in CI otherwise. Where it does run, those lint scripts are PR-controlled. The token is not in the job env (`inject-env-vars: false`) and never touches `$GITHUB_ENV`; the validate step re-emits the cleaned value as a masked step output, which feeds only the action input and the posting step's leak check. The `settings` deny rules keep `Read`/`Grep`/`Glob` out of `/proc`, `/sys`, `/home/runner/work/_temp`, and `/home/runner/.config`, so a prompt-injected read cannot reach the Claude process environment. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips credential env vars from Bash subprocesses; it needs `bubblewrap` for the PID namespace and `socat` before the sandbox will initialize Bash at all, both installed by the workflow before the Claude step, which also clears `kernel.apparmor_restrict_unprivileged_userns` (ubuntu-24.04 blocks the user namespace `bwrap` needs) and smoke-tests `bwrap` so a broken sandbox fails the step instead of silently costing the review its Bash tool — still treat the deny rules and the absence of write tools as the load-bearing controls, not subprocess isolation. A malicious lint script still runs, and a malicious same-repo PR can still prompt-inject. **Residual risk — state it plainly.** Push is blocked by `contents: read` (checkout also uses `persist-credentials: false`). It cannot merge.
+- Claude reads the PR and runs named git verbs on the checked-out PR head. Project lint is allowlisted but usually cannot run: the workflow deliberately does not install dependencies (an install would execute PR-controlled lifecycle scripts on a runner holding the token), so lint executes only where a caller repository already has its dependencies on disk, and the review reports it as not verifiable in CI otherwise. Where it does run, those lint scripts are PR-controlled. The token is not in the job env (`inject-env-vars: false`) and never touches `$GITHUB_ENV`; the validate step re-emits the cleaned value as a masked step output, which feeds only the action input and the posting step's leak check. The `settings` deny rules keep `Read`/`Grep`/`Glob` out of `/proc`, `/sys`, `/home/runner/work/_temp`, and `/home/runner/.config`, so a prompt-injected read cannot reach the Claude process environment. `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1` strips credential env vars from Bash subprocesses; it needs `bubblewrap` for the PID namespace and `socat` before the sandbox will initialize Bash at all, both installed by the workflow before the Claude step, which also clears `kernel.apparmor_restrict_unprivileged_userns` (ubuntu-24.04 blocks the user namespace `bwrap` needs — clearing it weakens host-level userns isolation runner-wide for the rest of the job, a deliberate trade to enable subprocess isolation) and smoke-tests `bwrap` so a broken sandbox fails the step instead of silently costing the review its Bash tool — still treat the deny rules and the absence of write tools as the load-bearing controls, not subprocess isolation. A malicious lint script still runs, and a malicious same-repo PR can still prompt-inject. **Residual risk — state it plainly.** Push is blocked by `contents: read` (checkout also uses `persist-credentials: false`). It cannot merge.
 - The commenter gate is an effective-permission check, so everyone with repository write access can spend review tokens at will; there is no rate limit beyond per-PR concurrency cancellation in the caller.
 - Review comments are advisory. The workflow is not a required check and must not gate merges; Claude review does not replace human review.
 
@@ -83,40 +83,9 @@ Rejected alternatives:
 
 ### Caller shape
 
-```yaml
-name: Claude code review
-
-on:
-  issue_comment:
-    types: [created]
-
-permissions:
-  contents: read
-  id-token: write
-  pull-requests: write
-
-jobs:
-  review:
-    # Trigger filter, not a security gate: the reusable workflow keeps all
-    # four gates and still enforces write access; the author_association
-    # check here is only a coarse pre-filter. The body match is exact on the
-    # two commands (plus a trailing-text form) so a near-miss comment like
-    # /reviews never claims the concurrency group and cancels a running
-    # review. Trade-off: a /review followed by a newline does not trigger.
-    if: >-
-      github.event.issue.pull_request &&
-      (github.event.comment.body == '/review' ||
-       startsWith(github.event.comment.body, '/review ') ||
-       github.event.comment.body == '/review-workflow' ||
-       startsWith(github.event.comment.body, '/review-workflow ')) &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    concurrency:
-      group: claude-review-${{ github.event.issue.number }}
-      cancel-in-progress: true
-    uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # full commit SHA only
-```
-
-This block mirrors `examples/claude-code-review/review.yml`, the canonical caller — keep them identical.
+The canonical caller is `examples/claude-code-review/review.yml` — the single
+source of truth for the trigger `if`, concurrency, and permissions. It is not
+duplicated here on purpose: an embedded copy drifts.
 
 `concurrency` sits on the job, behind the trigger filter. Workflow-level concurrency is claimed when the run is queued — before the reusable workflow's gates run — so without the filter any comment on the PR would cancel a review in flight. The `if` matches the two accepted commands exactly (plus their trailing-text forms), so a near-miss comment such as `/reviews` neither starts a run nor cancels one; it is a trigger filter, not a security gate — all four gates stay in the reusable workflow and still fail closed. `concurrency` groups by PR number (`issue_comment` runs on the default branch ref, so `github.ref` cannot tell PRs apart); cancellation makes a newer `/review` or `/review-workflow` supersede an in-flight review of the same PR.
 

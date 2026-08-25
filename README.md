@@ -184,41 +184,10 @@ Full operating guide: `specs/claude-code-review.md`.
 
 ## Usage
 
-```yaml
-name: Claude code review
-
-on:
-  issue_comment:
-    types: [created]
-
-permissions:
-  contents: read
-  id-token: write
-  pull-requests: write
-
-jobs:
-  review:
-    # Trigger filter, not a security gate: the reusable workflow keeps all
-    # four gates and still enforces write access; the author_association
-    # check here is only a coarse pre-filter. The body match is exact on the
-    # two commands (plus a trailing-text form) so a near-miss comment like
-    # /reviews never claims the concurrency group and cancels a running
-    # review. Trade-off: a /review followed by a newline does not trigger.
-    if: >-
-      github.event.issue.pull_request &&
-      (github.event.comment.body == '/review' ||
-       startsWith(github.event.comment.body, '/review ') ||
-       github.event.comment.body == '/review-workflow' ||
-       startsWith(github.event.comment.body, '/review-workflow ')) &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    concurrency:
-      group: claude-review-${{ github.event.issue.number }}
-      cancel-in-progress: true
-    uses: yearn/yearn-gha/.github/workflows/claude-code-review.yml@<approved-sha> # pin to the approved full commit SHA
-```
-
-The `jobs:` block mirrors `examples/claude-code-review/review.yml`, which is
-the canonical caller — keep the two identical.
+Copy `examples/claude-code-review/review.yml` — the canonical caller and the
+single source of truth for the trigger `if`, concurrency, and permissions —
+and replace `@<approved-sha>` with the approved full commit SHA. The snippet
+is not duplicated here on purpose: an embedded copy drifts.
 
 Caller workflows must grant `id-token: write` (OIDC login to Doppler) and
 `pull-requests: write` (posting review comments), in addition to
