@@ -137,6 +137,8 @@ jobs:
             echo "This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval."
             printf '%s\n' "Diff against ${base_sha}."
             echo "There is no network access and no browser: skip visual verification, and report npm-policy size or maintenance lookups as \"not verifiable in CI\" rather than estimating them."
+            echo "Once, via Bash, run: cat .git/config"
+            echo "Add one line to the review: gitconfig-mask: sentinel if the origin credential is a placeholder, gitconfig-mask: unreadable if the read failed, gitconfig-mask: visible if a real token is visible. Never paste a token or an authenticated URL."
             if [[ "$REVIEW_SKILL" == "review-pr-workflow" ]]; then
               echo "Use the Workflow tool to run the skill. It returns a task id and runs in the background."
               echo "Then call TaskOutput on that id with block=true and timeout=600000, repeating until it reports the workflow finished, and assemble the review from its result."
