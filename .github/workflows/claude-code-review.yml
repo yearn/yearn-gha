@@ -1,0 +1,350 @@
+name: Claude code review
+
+on:
+  workflow_call:
+
+jobs:
+  review:
+    name: Claude code review
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    env:
+      # Shared Doppler project holding the Claude Code OAuth token, used by
+      # every caller repository.
+      SHARED_PROJECT: webops-shared-prod
+      # Dedicated config: the fetch action exports every secret in the config,
+      # so reusing deploy-configs would put VERCEL_TOKEN on the review runner
+      # and the OAuth token on deploy runners.
+      REVIEW_CONFIG: claude-review
+      # Single service-account identity, trusted for every caller repository in
+      # the org; read access on the review config only.
+      DOPPLER_IDENTITY_ID: 11d2108f-ddc2-48f6-ad9c-e7fde0043741
+      WEBOPS_SKILLS_REPO: yearn/webops-skills
+      WEBOPS_SKILLS_SHA: 7542ac1b57766af2e468291e2339f2a620cd7110
+      DEFAULT_CLAUDE_ARGS: |
+        --setting-sources user
+        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,TaskOutput,TaskStop,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
+    steps:
+      # Coarse gate: only PR comments whose body starts with /review.
+      # The next step accepts only /review and /review-workflow.
+      - name: Reject events other than a review PR comment
+        if: ${{ github.event_name != 'issue_comment' || github.event.issue.pull_request.url == null || !startsWith(github.event.comment.body, '/review') }}
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_URL: ${{ github.event.issue.pull_request.url }}
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          printf '::error::claude-code-review only supports /review or /review-workflow comments on pull requests; got event=%s pr_url=%s comment=%s\n' "$EVENT_NAME" "${PR_URL:-}" "${COMMENT:-}" >&2
+          exit 1
+
+      - name: Resolve review command
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          cmd="$(printf '%s' "$COMMENT" | tr -d '\r' | awk 'NR==1 { print $1; exit }')"
+          case "$cmd" in
+            /review)
+              skill=review-pr
+              ;;
+            /review-workflow)
+              skill=review-pr-workflow
+              ;;
+            *)
+              printf '::error::claude-code-review accepts only /review or /review-workflow; got %s\n' "${cmd:-<empty>}" >&2
+              exit 1
+              ;;
+          esac
+          echo "REVIEW_SKILL=$skill" >> "$GITHUB_ENV"
+
+      # issue_comment still gets an OIDC token for any commenter. Fail before
+      # checkout or Doppler so a drive-by /review never fetches the secret.
+      # author_association is wider than write access (MEMBER covers every org
+      # member, COLLABORATOR includes read-only ones) and the action itself
+      # accepts only write, so gate on effective permission instead.
+      - name: Reject commenters without write access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          permission="$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission 2>/dev/null || true)"
+          case "$permission" in
+            admin|maintain|write) ;;
+            *)
+              printf '::error::claude-code-review requires write access; %s has permission=%s\n' "$ACTOR" "${permission:-none}" >&2
+              exit 1
+              ;;
+          esac
+
+      # issue_comment carries no PR head info; resolve it and refuse fork PRs
+      # so the token is never exercised against foreign code.
+      - name: Reject fork pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '{head: .head.repo.full_name, base: .base.ref}')"
+          head_repo="$(printf '%s' "$pr" | jq -r .head)"
+          base_ref="$(printf '%s' "$pr" | jq -r .base)"
+          if [[ "$head_repo" != "$REPO" ]]; then
+            echo "::error::pull requests from forks cannot run the review" >&2
+            exit 1
+          fi
+          echo "PR_BASE_REF=$base_ref" >> "$GITHUB_ENV"
+          echo "PR_NUMBER=$PR_NUMBER" >> "$GITHUB_ENV"
+
+      - name: Checkout pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch pull request base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ env.PR_BASE_REF }}
+        run: |
+          set -euo pipefail
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
+            fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+
+      # The prompt is built here, after the base is fetched: the pinned action
+      # shallow-fetches its own resolved base branch before Claude runs, so a
+      # symbolic base ref can lose its merge base mid-run. Resolve it once to an
+      # immutable SHA instead.
+      - name: Build review prompt
+        env:
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ env.PR_BASE_REF }}
+        run: |
+          set -euo pipefail
+          base_sha="$(git merge-base "origin/${BASE_REF}" HEAD)"
+          {
+            echo "REVIEW_PROMPT<<PROMPT_EOF"
+            printf '%s\n' "Review https://github.com/${REPO}/pull/${PR_NUMBER} using the ${REVIEW_SKILL} skill."
+            echo
+            echo "This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval."
+            printf '%s\n' "Diff against ${base_sha}."
+            echo "There is no network access and no browser: skip visual verification, and report npm-policy size or maintenance lookups as \"not verifiable in CI\" rather than estimating them."
+            echo "Once, via Bash, run: cat .git/config"
+            echo "Add one line to the review: gitconfig-mask: sentinel if the origin credential is a placeholder, gitconfig-mask: unreadable if the read failed, gitconfig-mask: visible if a real token is visible. Never paste a token or an authenticated URL."
+            if [[ "$REVIEW_SKILL" == "review-pr-workflow" ]]; then
+              echo "Use the Workflow tool to run the skill. It returns a task id and runs in the background."
+              echo "Then call TaskOutput on that id with block=true and timeout=600000, repeating until it reports the workflow finished, and assemble the review from its result."
+              echo "Your final reply must contain the assembled review; never end the turn while the workflow is still running."
+            else
+              echo "Do not start a Workflow. Run the skill in this session and finish here."
+            fi
+            echo
+            echo "Reply with the assembled review only (skill Review Format, raw markdown, no preamble, no fence)."
+            echo "PROMPT_EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout webops-skills
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ env.WEBOPS_SKILLS_REPO }}
+          ref: ${{ env.WEBOPS_SKILLS_SHA }}
+          path: .webops-skills
+          persist-credentials: false
+          sparse-checkout: |
+            skills/review-pr-workflow
+            skills/review-pr
+            skills/npm-policy
+
+      - name: Install review skills
+        run: |
+          set -euo pipefail
+          mv "$GITHUB_WORKSPACE/.webops-skills" "${RUNNER_TEMP}/webops-skills"
+          mkdir -p "$HOME/.claude/skills"
+          for s in review-pr-workflow review-pr npm-policy; do
+            src="${RUNNER_TEMP}/webops-skills/skills/$s"
+            test -d "$src"
+            rm -rf "$HOME/.claude/skills/$s"
+            cp -a "$src" "$HOME/.claude/skills/$s"
+          done
+
+      - name: Load Claude OAuth token from Doppler
+        id: doppler
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ env.DOPPLER_IDENTITY_ID }}
+          doppler-project: ${{ env.SHARED_PROJECT }}
+          doppler-config: ${{ env.REVIEW_CONFIG }}
+          # Keep the credential out of the job env: an injected prompt could
+          # otherwise read it from the env file the runner writes to disk.
+          inject-env-vars: false
+
+      - name: Validate Claude credentials
+        id: token
+        env:
+          RAW_TOKEN: ${{ steps.doppler.outputs.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          token="${RAW_TOKEN:-}"
+          token="${token//$'\r'/}"
+          token="${token//$'\n'/}"
+          token="${token#\"}"
+          token="${token%\"}"
+          if [[ -z "$token" ]]; then
+            echo "::error::CLAUDE_CODE_OAUTH_TOKEN must resolve from Doppler" >&2
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+          printf 'token length=%s\n' "${#token}"
+
+      - name: Comment that review started
+        id: start-comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review started (${REVIEW_SKILL}): ${RUN_URL}"
+
+      # The built-in Bash sandbox (sandbox.enabled in the settings file) needs
+      # bubblewrap for its namespaces and socat before it will initialize Bash.
+      # Neither ships in the runner image; without socat the run continues with
+      # no Bash tool at all, so lint and the named git verbs silently never
+      # execute.
+      - name: Install sandbox dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          # ubuntu-24.04 blocks unprivileged user namespaces via AppArmor, so
+          # bwrap fails with "setting up uid map: Permission denied" and every
+          # Bash command dies inside the sandbox.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v socat
+
+      - name: Run Claude code review
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
+        with:
+          claude_code_oauth_token: ${{ steps.token.outputs.token }}
+          # Without an explicit token the action falls back to its Claude
+          # GitHub App token, whose permissions ignore this job's block.
+          github_token: ${{ github.token }}
+          prompt: ${{ env.REVIEW_PROMPT }}
+          claude_args: ${{ env.DEFAULT_CLAUDE_ARGS }}
+          # Inline JSON, not a path: the action resolves a settings path against
+          # the caller repository's workspace, where this reusable workflow's
+          # own files are not checked out.
+          settings: |
+            {
+              "sandbox": {
+                "enabled": true,
+                "allowUnsandboxedCommands": false,
+                "filesystem": {
+                  "denyRead": [
+                    "/home/runner/work/_temp"
+                  ]
+                },
+                "credentials": {
+                  "files": [
+                    {
+                      "path": "${{ github.workspace }}/.git/config",
+                      "mode": "mask",
+                      "extract": "x-access-token:([^@]+)@",
+                      "onExtractNoMatch": "deny"
+                    }
+                  ],
+                  "envVars": [
+                    { "name": "GITHUB_TOKEN", "mode": "deny" },
+                    { "name": "GH_TOKEN", "mode": "deny" },
+                    { "name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny" }
+                  ]
+                },
+                "network": { "strictAllowlist": true, "allowedDomains": [] }
+              },
+              "permissions": {
+                "deny": [
+                  "Read(//proc/**)",
+                  "Read(//sys/**)",
+                  "Read(//home/runner/work/_temp/**)",
+                  "Read(//home/runner/.config/**)",
+                  "Grep(//proc/**)",
+                  "Grep(//sys/**)",
+                  "Grep(//home/runner/work/_temp/**)",
+                  "Grep(//home/runner/.config/**)",
+                  "Glob(//proc/**)",
+                  "Glob(//sys/**)",
+                  "Glob(//home/runner/work/_temp/**)",
+                  "Glob(//home/runner/.config/**)"
+                ]
+              }
+            }
+
+      # Both closing steps run whenever the started comment posted, even if a
+      # later step failed before the Claude step: a sandbox-install failure
+      # must still resolve "Review started" with a failure comment. Gate
+      # rejections happen before the started comment, so they post nothing;
+      # !cancelled() keeps a superseded (cancelled) run silent.
+      - name: Show Claude result envelope
+        if: ${{ !cancelled() && steps.start-comment.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          f="${EXEC_FILE:-}"
+          if [[ -z "$f" || ! -f "$f" ]]; then
+            f="${RUNNER_TEMP}/claude-execution-output.json"
+          fi
+          if [[ ! -f "$f" ]]; then
+            echo "::error::no claude-execution-output.json" >&2
+            exit 1
+          fi
+          # No `result` here: the raw review text only surfaces through the
+          # posting step below, after its credential check. GitHub log masking
+          # is verbatim-only, so an encoded token in the text would print.
+          jq '[.[] | select(.type=="result")] | last | {subtype, is_error, errors, stop_reason, total_cost_usd, num_turns}' "$f"
+
+      - name: Comment on PR
+        if: ${{ !cancelled() && steps.start-comment.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          EXEC_FILE: ${{ steps.claude.outputs.execution_file }}
+          OAUTH_TOKEN: ${{ steps.token.outputs.token }}
+          WORKFLOW_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          review=""
+          if [[ -n "${EXEC_FILE:-}" && -f "$EXEC_FILE" ]]; then
+            # Non-fatal: a malformed execution file must still reach the
+            # fallback comment below, not abort the step under `set -e`.
+            review="$(jq -r '[.[] | select(.type=="result" and (.is_error != true)) | .result // empty] | last // empty' "$EXEC_FILE" 2>/dev/null || true)"
+          fi
+          if [[ -z "$review" || "$review" == "null" ]]; then
+            echo "::error::claude-code-action produced no review text" >&2
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review failed: ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+            exit 1
+          fi
+          b64_oauth="$(printf '%s' "$OAUTH_TOKEN" | base64 -w0)"
+          b64_workflow="$(printf '%s' "$WORKFLOW_TOKEN" | base64 -w0)"
+          if [[ "$review" == *"$OAUTH_TOKEN"* || "$review" == *"$WORKFLOW_TOKEN"* || "$review" == *"$b64_oauth"* || "$review" == *"$b64_workflow"* ]]; then
+            echo "::error::review body contains credential material; not posting" >&2
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review failed: ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+            exit 1
+          fi
+          printf '%s\n' "$review" > "${RUNNER_TEMP}/review.md"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "${RUNNER_TEMP}/review.md"
