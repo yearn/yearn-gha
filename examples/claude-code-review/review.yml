@@ -3,6 +3,7 @@ name: Claude code review
 on:
   issue_comment:
     types: [created]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -10,7 +11,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  review:
+  filter:
     # Trigger filter, not a security gate: the reusable workflow keeps all
     # four gates and still enforces write access; the author_association
     # check here is only a coarse pre-filter. The body match is exact on the
@@ -18,12 +19,19 @@ jobs:
     # /reviews never claims the concurrency group and cancels a running
     # review. Trade-off: a /review followed by a newline does not trigger.
     if: >-
-      github.event.issue.pull_request &&
-      (github.event.comment.body == '/review' ||
-       startsWith(github.event.comment.body, '/review ') ||
-       github.event.comment.body == '/review-workflow' ||
-       startsWith(github.event.comment.body, '/review-workflow ')) &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       (github.event.comment.body == '/review' ||
+        startsWith(github.event.comment.body, '/review ') ||
+        github.event.comment.body == '/review-workflow' ||
+        startsWith(github.event.comment.body, '/review-workflow ')) &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo accepted
+  review:
+    needs: filter
+    if: github.event_name == 'issue_comment'
     concurrency:
       group: claude-review-${{ github.event.issue.number }}
       cancel-in-progress: true
