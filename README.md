@@ -149,3 +149,96 @@ Do the same steps for the preview environment if needed.
 
 See `examples/` for the current Katana APR, yvUSD APR, and fapy-hook shapes.
 See `specs/doppler-vercel.md` for the full operating guide.
+
+# Claude code review
+
+Reusable GitHub workflow (`.github/workflows/claude-code-review.yml`) that runs
+an automated Claude review on pull requests with
+[`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action).
+It is callable only through `workflow_call` — the caller supplies the trigger —
+and authenticates with a Claude Code OAuth token resolved from Doppler via
+OIDC. No static secret lives in the caller.
+
+Reviews are on demand. A collaborator comments `/review` or
+`/review-workflow` on a pull request, and the caller workflow dispatches
+the reusable workflow. The first token selects the skill:
+`/review` runs `review-pr` (single pass; better for small diffs);
+`/review-workflow` runs `review-pr-workflow` (fan-out). The workflow
+checks out the PR head, installs `review-pr`, `review-pr-workflow`, and
+`npm-policy` from `yearn/webops-skills` at a pinned SHA, and reads the
+review from the action's result text. A follow-up step posts that body
+with `gh pr comment`. The action prompt is only the invocation plus CI
+constraints; it is not an inlined rubric. The tool allowlist grants no
+Write/Edit, no `WebFetch`, and no comment tools.
+
+The built-in Bash sandbox (enabled in `settings`) is the only boundary on
+Bash. It confines every Bash command and child process: it denies writes to
+`.git/config` and `.git/hooks`, strips `GITHUB_TOKEN`/`GH_TOKEN` from
+subprocesses, masks the workflow token in the checkout's `.git/config`,
+denies reads of the runner file-command directory, and blocks all network
+access. It also auto-approves commands, so the `Bash(...)` entries in
+`--allowedTools` describe intent, not an enforced boundary — observed runs
+run `cat`, which is not allowlisted.
+
+Claude's own `Read`/`Grep`/`Glob` are not sandboxed. `settings` deny rules
+keep them out of `/proc`, `/sys`, the runner file-command directory, and
+`.config`. They are not kept out of `.git`: the pinned action writes an
+authenticated remote URL into `.git/config` before Claude starts, and
+`Read` sees it unmasked. The posting step's credential check is the only
+control between that and a posted comment.
+
+Anything other than a `/review` or `/review-workflow` comment on a pull
+request fails before the action runs. Because `issue_comment` runs with
+repository secrets no matter who comments, only commenters with `write`,
+`maintain`, or `admin` permission are accepted, and fork pull requests
+are rejected.
+
+Full operating guide: `specs/claude-code-review.md`.
+
+## Usage
+
+Copy `examples/claude-code-review/review.yml` — the canonical caller and the
+single source of truth for the trigger `if`, concurrency, and permissions —
+and replace `@<approved-sha>` with the approved full commit SHA. The snippet
+is not duplicated here on purpose: an embedded copy drifts.
+
+Caller workflows must grant `id-token: write` (OIDC login to Doppler) and
+`pull-requests: write` (posting review comments), in addition to
+`contents: read`. Reusable workflows cannot elevate beyond the caller's token
+permissions; the workflow passes its own `github.token` to the action so
+GitHub operations stay within these permissions.
+
+## Doppler setup
+
+The Claude Code OAuth token is stored once, as `CLAUDE_CODE_OAUTH_TOKEN` in
+the `claude-review` config of the shared `webops-shared-prod` project. The
+workflow authenticates to Doppler as a service-account identity with the
+GitHub Actions OIDC token and fetches it at run time; no caller repository
+holds an Actions secret.
+
+Keep ONLY that token in `claude-review` — the fetch action exports every
+secret in the config onto the runner. That is also why the review does not
+reuse `deploy-configs`: sharing it would put `VERCEL_TOKEN` on review runners
+and the OAuth token on deploy runners. Set the token's visibility to Masked;
+the fetch action registers GitHub log redaction only for values that are not
+Unmasked.
+
+Create the identity with OIDC (discovery/issuer URL
+`https://token.actions.githubusercontent.com`), trust the caller repositories
+in the org, and grant it read access to `webops-shared-prod` /
+`claude-review` only. Confirm `DOPPLER_IDENTITY_ID` in the reusable workflow
+matches that identity. The identity is org-trusted: any workflow in a trusted
+repo that grants `id-token: write` can fetch the token, not only this
+reusable workflow. The `/review` / `/review-workflow` and fork gates bound this workflow only.
+
+To rotate, run `claude setup-token` again (requires a Claude subscription) and
+update that one Doppler secret; every caller picks up the new value on its
+next run. The workflow fails fast if the token resolves empty.
+
+There are no inputs; the prompt, tool allowlist, and gates live only in the
+reusable workflow. The caller supplies the `issue_comment` trigger, permissions,
+and SHA pin. The reusable workflow checks the event, the `/review` or
+`/review-workflow` command, the commenter's access, and the PR origin,
+and fails closed.
+
+See `examples/claude-code-review/` for the caller.
