@@ -268,7 +268,8 @@ jobs:
                   ],
                   "envVars": [
                     { "name": "GITHUB_TOKEN", "mode": "deny" },
-                    { "name": "GH_TOKEN", "mode": "deny" }
+                    { "name": "GH_TOKEN", "mode": "deny" },
+                    { "name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny" }
                   ]
                 },
                 "network": { "strictAllowlist": true, "allowedDomains": [] }

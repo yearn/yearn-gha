@@ -168,16 +168,24 @@ checks out the PR head, installs `review-pr`, `review-pr-workflow`, and
 `npm-policy` from `yearn/webops-skills` at a pinned SHA, and reads the
 review from the action's result text. A follow-up step posts that body
 with `gh pr comment`. The action prompt is only the invocation plus CI
-constraints; it is not an inlined rubric. The tool allowlist is read-only
-(no Write/Edit, no `WebFetch`, no comment tools). Two controls cover
-credential material on disk: the built-in Bash sandbox (enabled in
-`settings`) confines every Bash command and child process — it denies
-writes to `.git/config` and `.git/hooks`, strips `GITHUB_TOKEN`/`GH_TOKEN`
-from subprocesses, and blocks all network access — while `settings` deny
-rules keep Claude's own `Read`/`Grep`/`Glob` out of `/proc`, `/sys`, the
-runner file-command directory, `.config`, and the checkout's `.git`
-directory (the pinned action writes an authenticated remote URL into
-`.git/config` before Claude starts).
+constraints; it is not an inlined rubric. The tool allowlist grants no
+Write/Edit, no `WebFetch`, and no comment tools.
+
+The built-in Bash sandbox (enabled in `settings`) is the only boundary on
+Bash. It confines every Bash command and child process: it denies writes to
+`.git/config` and `.git/hooks`, strips `GITHUB_TOKEN`/`GH_TOKEN` from
+subprocesses, masks the workflow token in the checkout's `.git/config`,
+denies reads of the runner file-command directory, and blocks all network
+access. It also auto-approves commands, so the `Bash(...)` entries in
+`--allowedTools` describe intent, not an enforced boundary — observed runs
+run `cat`, which is not allowlisted.
+
+Claude's own `Read`/`Grep`/`Glob` are not sandboxed. `settings` deny rules
+keep them out of `/proc`, `/sys`, the runner file-command directory, and
+`.config`. They are not kept out of `.git`: the pinned action writes an
+authenticated remote URL into `.git/config` before Claude starts, and
+`Read` sees it unmasked. The posting step's credential check is the only
+control between that and a posted comment.
 
 Anything other than a `/review` or `/review-workflow` comment on a pull
 request fails before the action runs. Because `issue_comment` runs with
