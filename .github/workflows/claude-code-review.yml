@@ -24,7 +24,7 @@ jobs:
       # the org; read access on the review config only.
       DOPPLER_IDENTITY_ID: 11d2108f-ddc2-48f6-ad9c-e7fde0043741
       WEBOPS_SKILLS_REPO: yearn/webops-skills
-      WEBOPS_SKILLS_SHA: 7542ac1b57766af2e468291e2339f2a620cd7110
+      WEBOPS_SKILLS_SHA: 0d7c82d8262d3633fa3025940881ba4af11ea25f
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
         --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,TaskOutput,TaskStop,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
