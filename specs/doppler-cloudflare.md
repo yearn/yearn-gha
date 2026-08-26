@@ -50,7 +50,7 @@ Provided controls (shared with the Vercel design):
 Not eliminated:
 
 - `CLOUDFLARE_API_TOKEN` is still a long-lived credential exposed to wrangler on the runner. Compromise is account-wide.
-- **The build runs on the runner.** Unlike Vercel remote builds, wrangler bundles the worker on the runner, so third-party dependency code executes during the deploy. The workflow narrows the exposure: the app's own `bun install` runs before the Doppler fetch, and the credentials are read as step outputs (`inject-env-vars: false`) rather than injected into the job environment, so that install's scripts never see them; after the fetch, only the validate step (explicit env mapping) and the wrangler-action inputs receive them. The workflow also passes no `wranglerVersion`, so wrangler-action runs no install of its own in the step that holds the token. Residual risk: dependency code that wrangler-action bundles still runs in that step; a compromised dependency can exfiltrate the token there. Mitigation is dependency hygiene (lockfiles, review of lockfile diffs), not this workflow.
+- **The build runs on the runner.** Unlike Vercel remote builds, wrangler bundles the worker on the runner, so third-party dependency code executes during the deploy. The workflow narrows the exposure: the app's own `bun install` runs before the Doppler fetch, and the credentials are read as step outputs (`inject-env-vars: false`) rather than injected into the job environment, so that install's scripts never see them; after the fetch, only the validate step (explicit env mapping) and the wrangler-action inputs receive them. The workflow also passes no `wranglerVersion`, and asserts `node_modules/.bin/wrangler` exists before any credential is fetched, so wrangler-action runs no install of its own in the step that holds the token. Residual risk: dependency code that wrangler-action bundles still runs in that step; a compromised dependency can exfiltrate the token there. Mitigation is dependency hygiene (lockfiles, review of lockfile diffs), not this workflow.
 - **Step ordering is not an authorization boundary.** `id-token: write` is job-scoped, so any code that runs earlier in the job can mint the same OIDC token and fetch from Doppler itself. Running the install first keeps the fetched values out of the install step's environment; it does not keep dependency code away from the credential.
 - OIDC policy is an authorization boundary only when all relevant claims are checked; identity IDs are public metadata.
 
@@ -58,8 +58,8 @@ Not eliminated:
 
 - A small caller workflow in each worker repository invokes the SHA-pinned reusable workflow in `yearn/yearn-gha`.
 - The only supported trigger is a push to the caller repository's default branch, which runs `wrangler deploy`. Everything else is rejected before Doppler authentication.
-- The workflow installs dependencies with `bun install --frozen-lockfile` (the fleet standardizes on bun, pinned to `1.3.14` in the workflow), then fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `webops-shared-prod` / `cloudflare-deploy-configs` as step outputs, validates them, and runs `wrangler deploy` via `cloudflare/wrangler-action`. No `wranglerVersion` is passed: wrangler-action uses the wrangler the app repository already installed, so the wrangler pin is the app's lockfile.
-- **Precondition: the caller repository ships a bun lockfile** (`bun.lock` or `bun.lockb`) and a wrangler devDependency. `bun install --frozen-lockfile` fails otherwise, before Doppler is reached. `yearn/yearn-rpc-read-proxy` meets this today; `yearn/dns-bot` ships `package-lock.json` and must migrate to bun before it can call this workflow.
+- The workflow installs dependencies with `bun install --frozen-lockfile` (the fleet standardizes on bun; the version is pinned in `.github/workflows/cloudflare-deploy.yml`), asserts wrangler is installed locally, then fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `webops-shared-prod` / `cloudflare-deploy-configs` as step outputs, validates them, and runs `wrangler deploy` via `cloudflare/wrangler-action`. No `wranglerVersion` is passed: wrangler-action uses the wrangler the app repository already installed, so the wrangler pin is the app's lockfile.
+- **Precondition: the caller repository ships a bun lockfile** (`bun.lock` or `bun.lockb`) and a wrangler devDependency. A missing or stale lockfile fails `bun install --frozen-lockfile`; a valid lockfile that never lists wrangler fails the explicit `node_modules/.bin/wrangler` assert. Both run before Doppler is reached. `yearn/yearn-rpc-read-proxy` meets this today; `yearn/dns-bot` ships `package-lock.json` and must migrate to bun before it can call this workflow.
 - Post-deploy verification (smoke tests) stays in the caller as a `needs: deploy` job — the reusable workflow is deploy-only.
 - Output: `deployment-url` — the production URL parsed by the action. It is empty for a worker with no `workers.dev` subdomain or route, and is only the first target for a multi-route worker.
 
@@ -71,10 +71,6 @@ name: Deploy to Cloudflare Workers
 on:
   push:
     branches: [main] # or master — match the repository default branch
-
-concurrency:
-  group: cloudflare-deploy-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -139,8 +135,9 @@ The `job_workflow_ref` condition is mandatory — without it, any workflow in th
 
 ## GitHub controls
 
-Same as the Vercel guide (`specs/doppler-vercel.md` — branch protection, no `pull_request_target`, SHA-pinned actions, concurrency with cancellation). Workers-specific additions:
+Same as the Vercel guide (`specs/doppler-vercel.md` — branch protection, no `pull_request_target`, SHA-pinned actions). Workers-specific additions:
 
+- The reusable workflow owns deploy serialization: one job-level concurrency group per caller repository, `cancel-in-progress: false`. Cancellation is deliberately not inherited from the Vercel guide — a cancelled `wrangler deploy` has no defined outcome mid-upload, and GitHub supersedes the queued run anyway, so the newest commit still wins. Callers need no concurrency block.
 - Pin bun in the reusable workflow (`1.3.14` today) and wrangler in each app repository's devDependencies plus lockfile; upgrade either through a reviewed change.
 - Review lockfile diffs: dependency code runs during the wrangler-action bundle step, which holds the deploy token.
 - A person who can land code on the default branch can deploy the worker. Default-branch protection is the production authorization boundary — there is no other deploy path through this workflow.

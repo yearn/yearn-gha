@@ -24,6 +24,13 @@ jobs:
   deploy:
     name: Deploy to Cloudflare Workers
     runs-on: ubuntu-latest
+    # Serialize per caller repository so two rapid pushes cannot race and
+    # leave production on the older commit. Not cancel-in-progress: killing a
+    # wrangler deploy mid-upload has no defined outcome. GitHub supersedes the
+    # queued run instead, so the newest commit still wins.
+    concurrency:
+      group: cloudflare-deploy-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: read
       id-token: write
@@ -66,13 +73,26 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # wrangler-action passes no wranglerVersion, so it execs the wrangler
+      # from node_modules/.bin. If the caller has no wrangler dependency the
+      # action would install an unpinned one from npm in the step that already
+      # holds the token. A valid lockfile does not rule that out, so assert it
+      # here, before any credential is fetched.
+      - name: Assert wrangler is installed locally
+        run: |
+          if [[ ! -x node_modules/.bin/wrangler ]]; then
+            echo "::error::wrangler must be a dependency of the caller repository (pinned in its lockfile); wrangler-action must not install one alongside the deploy token" >&2
+            exit 1
+          fi
+
       # Deploy credentials live alone in cloudflare-deploy-configs: a broader
       # config would pull other secrets onto the runner. The values are read
       # as step outputs, never injected into the job environment; only the
       # validate step (explicit env mapping) and the wrangler-action inputs
       # receive them. With no wranglerVersion input, wrangler-action uses the
-      # wrangler the app repository already installed, so no install runs in
-      # the step that holds the token. Worker runtime secrets are synced to Cloudflare out of
+      # wrangler the app repository already installed; the preceding assert is
+      # what guarantees no install runs in the step that holds the token.
+      # Worker runtime secrets are synced to Cloudflare out of
       # band (see specs/doppler-cloudflare.md), never through this workflow.
       - name: Load shared Cloudflare token and account ID from Doppler
         id: doppler

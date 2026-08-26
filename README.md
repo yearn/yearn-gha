@@ -157,18 +157,22 @@ Do the same steps for the preview environment if needed.
 
 ## Cloudflare Workers deploy
 
-The workflow installs dependencies with bun (pinned to `1.3.14`,
-`--frozen-lockfile`), fetches `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` as step outputs from the `cloudflare-deploy-configs`
-config of the shared `webops-shared-prod` project, and runs
-`wrangler deploy`. No `wranglerVersion` is passed, so wrangler-action uses
-the wrangler the app repository installed — pin wrangler in the app's
-devDependencies and lockfile. There is no per-app Doppler deploy project:
+The workflow installs dependencies with bun (`--frozen-lockfile`, pinned in
+`.github/workflows/cloudflare-deploy.yml`), fetches `CLOUDFLARE_API_TOKEN`
+and `CLOUDFLARE_ACCOUNT_ID` as step outputs from the
+`cloudflare-deploy-configs` config of the shared `webops-shared-prod`
+project, and runs `wrangler deploy`. No `wranglerVersion` is passed, so
+wrangler-action uses the wrangler the app repository installed — pin
+wrangler in the app's devDependencies and lockfile. There is no per-app
+Doppler deploy project:
 the worker's identity is its name in the app repository's `wrangler.toml`,
 so the workflow takes only `identity-id`.
 
-Callers must ship a bun lockfile and a wrangler devDependency; otherwise
-`bun install --frozen-lockfile` fails before Doppler is reached. The
+Callers must ship a bun lockfile and a wrangler devDependency. A missing or
+stale lockfile fails `bun install --frozen-lockfile`; a lockfile without
+wrangler fails an explicit assert on `node_modules/.bin/wrangler`. Both run
+before Doppler is reached, so wrangler-action never installs an unpinned
+wrangler in the step that holds the token. The
 workflow is deploy-only — run smoke tests in a `needs: deploy` job in the
 caller (see `examples/rpc-read-proxy/deploy.yml`).
 
@@ -197,10 +201,6 @@ on:
   push:
     branches: [main]
 
-concurrency:
-  group: cloudflare-deploy-${{ github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
   id-token: write
@@ -211,6 +211,10 @@ jobs:
     with:
       identity-id: ${{ vars.DOPPLER_PRODUCTION_IDENTITY_ID }}
 ```
+
+Deploys are serialized by the reusable workflow itself (one job-level
+concurrency group per caller repository, without cancellation), so callers
+need no concurrency block.
 
 Callers grant only `contents: read` and `id-token: write` — wrangler-action
 posts no PR comments and creates no GitHub deployments. Configure
