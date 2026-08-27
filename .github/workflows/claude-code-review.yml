@@ -7,7 +7,10 @@ jobs:
   review:
     name: Claude code review
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Ceiling only. The real bound is the step timeout on "Run Claude code
+    # review"; this stays above it so a job-level kill (which cancels the job
+    # and skips the posting steps) never fires first.
+    timeout-minutes: 90
     permissions:
       contents: read
       id-token: write
@@ -237,6 +240,12 @@ jobs:
       - name: Run Claude code review
         id: claude
         continue-on-error: true
+        # /review-workflow fans out subagents and has overrun 45 min. A job
+        # timeout cancels the job, so !cancelled() skips the posting steps and
+        # the PR is left on "Review started" forever. A step timeout is a step
+        # failure instead: the job keeps running and the two steps below still
+        # report. Raise if reviews legitimately grow past this.
+        timeout-minutes: 75
         uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
         with:
           claude_code_oauth_token: ${{ steps.token.outputs.token }}
@@ -330,14 +339,21 @@ jobs:
         run: |
           set -euo pipefail
           review=""
-          if [[ -n "${EXEC_FILE:-}" && -f "$EXEC_FILE" ]]; then
+          # A timed-out or failed action never sets execution_file, but the
+          # runner may still hold a complete envelope on disk: prefer the
+          # output, fall back to the known path before giving up.
+          f="${EXEC_FILE:-}"
+          if [[ -z "$f" || ! -f "$f" ]]; then
+            f="${RUNNER_TEMP}/claude-execution-output.json"
+          fi
+          if [[ -f "$f" ]]; then
             # Non-fatal: a malformed execution file must still reach the
             # fallback comment below, not abort the step under `set -e`.
-            review="$(jq -r '[.[] | select(.type=="result" and (.is_error != true)) | .result // empty] | last // empty' "$EXEC_FILE" 2>/dev/null || true)"
+            review="$(jq -r '[.[] | select(.type=="result" and (.is_error != true)) | .result // empty] | last // empty' "$f" 2>/dev/null || true)"
           fi
           if [[ -z "$review" || "$review" == "null" ]]; then
             echo "::error::claude-code-action produced no review text" >&2
-            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review failed: ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
+            gh pr comment "$PR_NUMBER" --repo "$REPO" --body "Review did not finish (timed out or failed): ${GITHUB_SERVER_URL}/${REPO}/actions/runs/${GITHUB_RUN_ID}"
             exit 1
           fi
           b64_oauth="$(printf '%s' "$OAUTH_TOKEN" | base64 -w0)"
