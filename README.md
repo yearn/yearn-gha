@@ -173,8 +173,9 @@ lockfile fails an explicit `bun.lock`/`bun.lockb` check before the install —
 `--frozen-lockfile` only rejects a lockfile that *would change*, so with none
 present bun would resolve wrangler fresh from the registry; a stale lockfile
 fails the frozen install itself; and a lockfile without a runnable wrangler
-fails a `bunx --no-install wrangler --version` probe, the same probe
-wrangler-action uses to decide whether to install its own. All three run
+fails a `bun run wrangler --version` probe — the exact command
+wrangler-action runs for a bun caller to decide whether to install its own —
+which must exit 0 and print a parseable wrangler version. All three run
 before Doppler is reached, so wrangler-action never installs an unpinned
 wrangler in the step that holds the token. The
 workflow is deploy-only — run smoke tests in a `needs: deploy` job in the

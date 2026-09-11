@@ -85,15 +85,21 @@ jobs:
         run: bun install --frozen-lockfile
 
       # wrangler-action passes no wranglerVersion, so it decides whether to
-      # install by probing the local wrangler through the package manager. A
-      # wrangler file that exists but fails that probe still triggers an
-      # unpinned install in the step that already holds the token, so run the
-      # same probe here, before any credential is fetched, and require a version.
+      # install by running `bun run wrangler --version` (its bun execNoInstall
+      # command) and parsing stdout for a wrangler version; a non-zero exit or
+      # no parseable version triggers an unpinned install in the step that
+      # already holds the token. Run that exact command here, before any
+      # credential is fetched, and fail unless stdout carries a version.
       - name: Assert wrangler runs locally
         run: |
           set -euo pipefail
-          if ! version=$(bunx --no-install wrangler --version 2>&1); then
-            echo "::error::wrangler must be an installed, runnable dependency of the caller repository (pinned in its lockfile); wrangler-action must not install one alongside the deploy token. Probe output: ${version}" >&2
+          if ! stdout=$(bun run wrangler --version); then
+            echo "::error::wrangler must be an installed, runnable dependency of the caller repository (pinned in its lockfile); wrangler-action must not install one alongside the deploy token. Probe stdout: ${stdout}" >&2
+            exit 1
+          fi
+          version=$(printf '%s\n' "$stdout" | grep -Eo -m1 'wrangler [0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?|^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' || true)
+          if [[ -z "$version" ]]; then
+            echo "::error::\`bun run wrangler --version\` printed no wrangler version, so wrangler-action would install an unpinned wrangler alongside the deploy token. Probe stdout: ${stdout}" >&2
             exit 1
           fi
           printf 'local wrangler: %s\n' "$version"
