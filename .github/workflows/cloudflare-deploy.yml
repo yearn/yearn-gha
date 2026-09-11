@@ -1,0 +1,145 @@
+name: Cloudflare Workers deploy
+
+on:
+  workflow_call:
+    inputs:
+      identity-id:
+        description: Doppler service account identity ID for the production deploy (bound to a push to the default branch).
+        required: true
+        type: string
+    outputs:
+      deployment-url:
+        description: Production URL returned by wrangler.
+        value: ${{ jobs.deploy.outputs.deployment-url }}
+
+env:
+  # Shared Doppler project holding CLOUDFLARE_API_TOKEN and
+  # CLOUDFLARE_ACCOUNT_ID, used by every worker deploy. The config is
+  # separate from the Vercel deploy-configs so neither platform's deploy
+  # exports the other's credentials onto its runner.
+  SHARED_PROJECT: webops-shared-prod
+  DEPLOY_CONFIG: cloudflare-deploy-configs
+
+jobs:
+  deploy:
+    name: Deploy to Cloudflare Workers
+    runs-on: ubuntu-latest
+    # Serialize per caller repository so two rapid pushes cannot race and
+    # leave production on the older commit. Not cancel-in-progress: killing a
+    # wrangler deploy mid-upload has no defined outcome. GitHub supersedes the
+    # queued run instead, so the newest commit still wins.
+    concurrency:
+      group: cloudflare-deploy-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+    steps:
+      # Workers have no preview environment: the only supported trigger is a
+      # push to the caller's default branch. Enforce it here so pull_request,
+      # workflow_dispatch, schedule, and non-default-branch pushes can never
+      # reach Doppler or wrangler deploy.
+      - name: Reject non-default-branch production deploys
+        if: github.event_name != 'push' || github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          printf '::error::deploys are only allowed for a push to the default branch (%s); got %s on %s\n' \
+            "$DEFAULT_BRANCH" "$EVENT_NAME" "$REF" >&2
+          exit 1
+
+      - name: Checkout app repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Unlike Vercel there is no remote build: wrangler bundles the worker
+      # on the runner, so project dependencies must be installed. The fleet
+      # standardizes on bun, so the caller repository must ship a bun
+      # lockfile. The app's own install runs before the Doppler fetch, so its
+      # install scripts never see the deploy credentials; this is not an
+      # authorization boundary, because any step in this job can mint the
+      # OIDC token itself. Both bun and wrangler are pinned: bun here,
+      # wrangler by the app repository's lockfile.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.14"
+
+      # --frozen-lockfile only rejects a lockfile that would change; with no
+      # lockfile at all bun resolves every dependency fresh from the registry,
+      # wrangler included, which defeats the app-lockfile wrangler pin. Assert the
+      # lockfile explicitly, before the install and before any credential.
+      - name: Assert caller ships a bun lockfile
+        run: |
+          if [[ ! -f bun.lock && ! -f bun.lockb ]]; then
+            echo "::error::caller repository must ship bun.lock or bun.lockb; without one bun resolves wrangler fresh from the registry and the wrangler pin is lost" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # wrangler-action passes no wranglerVersion, so it decides whether to
+      # install by running `bun run wrangler --version` (its bun execNoInstall
+      # command) and parsing stdout for a wrangler version; a non-zero exit or
+      # no parseable version triggers an unpinned install in the step that
+      # already holds the token. Run that exact command here, before any
+      # credential is fetched, and fail unless stdout carries a version.
+      - name: Assert wrangler runs locally
+        run: |
+          set -euo pipefail
+          if ! stdout=$(bun run wrangler --version); then
+            echo "::error::wrangler must be an installed, runnable dependency of the caller repository (pinned in its lockfile); wrangler-action must not install one alongside the deploy token. Probe stdout: ${stdout}" >&2
+            exit 1
+          fi
+          version=$(printf '%s\n' "$stdout" | grep -Eo -m1 'wrangler [0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?|^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' || true)
+          if [[ -z "$version" ]]; then
+            echo "::error::\`bun run wrangler --version\` printed no wrangler version, so wrangler-action would install an unpinned wrangler alongside the deploy token. Probe stdout: ${stdout}" >&2
+            exit 1
+          fi
+          printf 'local wrangler: %s\n' "$version"
+
+      # Deploy credentials live alone in cloudflare-deploy-configs: a broader
+      # config would pull other secrets onto the runner. The values are read
+      # as step outputs, never injected into the job environment; only the
+      # validate step (explicit env mapping) and the wrangler-action inputs
+      # receive them. With no wranglerVersion input, wrangler-action uses the
+      # wrangler the app repository already installed; the preceding probe is
+      # what guarantees no install runs in the step that holds the token.
+      # Worker runtime secrets are synced to Cloudflare out of
+      # band (see specs/doppler-cloudflare.md), never through this workflow.
+      - name: Load shared Cloudflare token and account ID from Doppler
+        id: doppler
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ inputs.identity-id }}
+          doppler-project: ${{ env.SHARED_PROJECT }}
+          doppler-config: ${{ env.DEPLOY_CONFIG }}
+          inject-env-vars: false
+
+      - name: Validate Cloudflare credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          for var in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [[ -z "${!var:-}" ]]; then
+              echo "::error::${var} must resolve from its configured Doppler project" >&2
+              exit 1
+            fi
+          done
+
+      - name: Deploy to Cloudflare Workers
+        id: deploy
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy

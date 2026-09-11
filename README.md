@@ -1,34 +1,42 @@
-# Vercel deploy
+# Deploy workflows
 
-Reusable GitHub workflow for deploying Vercel projects with credentials
-resolved from Doppler via OIDC. No static secrets live in GitHub.
+Reusable GitHub workflows for deploying to Vercel and Cloudflare Workers with
+credentials resolved from Doppler via OIDC. No static secrets live in GitHub.
 
-The workflow authenticates to Doppler as a service-account identity using the
-GitHub Actions OIDC token, fetches `VERCEL_TOKEN`, `VERCEL_ORG_ID` and
-`VERCEL_PROJECT_ID` from the `deploy-configs` config of the given Doppler
-project(s), and runs `vercel deploy` — the build happens remotely on Vercel
-with the env vars synced there by Doppler Vercel integrations. App secrets
-never pass through GitHub Actions.
+Both workflows share the same skeleton: authenticate to Doppler as a
+service-account identity using the GitHub Actions OIDC token, fetch only the
+deploy credentials, and deploy. The deploy environment is derived from the
+triggering event, never passed by the caller. Vercel deploys previews for
+pull requests and production for a `push` to the caller repository's default
+branch; Cloudflare Workers deploys production only. Unsupported events
+(`workflow_dispatch`, `schedule`, non-default-branch pushes, fork pull
+requests) are rejected before credentials are loaded.
+
+| Workflow | Guide |
+| -------- | ----- |
+| `.github/workflows/vercel-deploy.yml` | `specs/doppler-vercel.md` |
+| `.github/workflows/cloudflare-deploy.yml` | `specs/doppler-cloudflare.md` |
+
+## Vercel deploy
+
+The workflow fetches `VERCEL_TOKEN`, `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`
+from the `deploy-configs` config of the given Doppler project(s), and runs
+`vercel deploy` — the build happens remotely on Vercel with the env vars
+synced there by Doppler Vercel integrations. App secrets never pass through
+GitHub Actions.
 
 `VERCEL_TOKEN` and `VERCEL_ORG_ID` come from the shared `webops-shared-prod`
 project (`deploy-configs` config), defined in the workflow — one place to
-rotate them across apps. The app project only holds its `VERCEL_PROJECT_ID`.
+rotate them across apps. The app project only holds its `VERCEL_PROJECT_ID`,
+always read from `deploy-configs` (one Vercel project, one ID). The workflow
+never fetches `prd` or `preview`.
 
-The deploy environment is derived from the triggering event, not passed by the
-caller: pull requests deploy previews (Vercel preview, no `--prod`), anything
-else deploys production (`--prod` on the Vercel CLI) and is accepted only for a
-`push` to the caller repository's default branch; `workflow_dispatch`,
-`schedule`, and pushes to any other branch are rejected before credentials are
-loaded. The production identity's OIDC subject binding
-(`ref:refs/heads/main`, see Doppler setup) is defense in depth on top of that
-check. Fork pull requests are rejected (no OIDC token is issued for them).
+Pull requests deploy Vercel previews (no `--prod`); a default-branch push
+deploys production (`--prod`). The production identity's OIDC subject binding
+(`ref:refs/heads/main`, see Doppler setup) is defense in depth on top of the
+workflow's own event checks.
 
-The app project's `VERCEL_PROJECT_ID` is always read from `deploy-configs`
-(one Vercel project, one ID). The workflow never fetches `prd` or `preview`.
-
-Full operating guide: `specs/doppler-vercel.md`.
-
-## Usage
+### Usage
 
 ```yaml
 name: Deploy to Vercel
@@ -65,14 +73,14 @@ caller. Use two identities; the `pull_request` vs
 `ref:refs/heads/<default>` subject binding is what stops a PR from deploying
 production.
 
-## Inputs
+### Inputs
 
 | Name          | Required | Default | Description                                                                 |
 | ------------- | -------- | ------- | --------------------------------------------------------------------------- |
 | `project`     | yes      | —       | Doppler project containing `VERCEL_PROJECT_ID` in `deploy-configs`.         |
 | `identity-id` | yes      | —       | Doppler service-account identity for the event; loads shared + app `deploy-configs`. |
 
-## Outputs
+### Outputs
 
 | Name             | Description                                    |
 | ---------------- | ---------------------------------------------- |
@@ -81,7 +89,7 @@ production.
 Consume it from a downstream job with
 `${{ needs.deploy.outputs.deployment-url }}`.
 
-## Doppler setup
+### Doppler setup
 
 1. Create the shared `webops-shared-prod` project with `VERCEL_TOKEN` and
    `VERCEL_ORG_ID` in the `deploy-configs` config, and a project per app with
@@ -121,14 +129,14 @@ Consume it from a downstream job with
    shown above. The same identity authenticates both the shared
    (`webops-shared-prod`) and app project fetches.
 
-### Residual risk
+#### Residual risk
 
 Preview and production runs both read the same `deploy-configs` configs.
 Those configs hold only `VERCEL_PROJECT_ID` (app) and `VERCEL_TOKEN` +
 `VERCEL_ORG_ID` (shared) today; anything later added there is exported to
 the runner by the same action.
 
-## Migration from Vercel-managed env vars
+### Migration from Vercel-managed env vars
 
 1. Set up the Vercel integration in Doppler.
 2. Create one integration per env:
@@ -147,8 +155,107 @@ the runner by the same action.
 
 Do the same steps for the preview environment if needed.
 
-See `examples/` for the current Katana APR, yvUSD APR, and fapy-hook shapes.
-See `specs/doppler-vercel.md` for the full operating guide.
+## Cloudflare Workers deploy
+
+The workflow installs dependencies with bun (`--frozen-lockfile`, pinned in
+`.github/workflows/cloudflare-deploy.yml`), fetches `CLOUDFLARE_API_TOKEN`
+and `CLOUDFLARE_ACCOUNT_ID` as step outputs from the
+`cloudflare-deploy-configs` config of the shared `webops-shared-prod`
+project, and runs `wrangler deploy`. No `wranglerVersion` is passed, so
+wrangler-action uses the wrangler the app repository installed — pin
+wrangler in the app's devDependencies and lockfile. There is no per-app
+Doppler deploy project:
+the worker's identity is its name in the app repository's `wrangler.toml`,
+so the workflow takes only `identity-id`.
+
+Callers must ship a bun lockfile and a wrangler devDependency. A missing
+lockfile fails an explicit `bun.lock`/`bun.lockb` check before the install —
+`--frozen-lockfile` only rejects a lockfile that *would change*, so with none
+present bun would resolve wrangler fresh from the registry; a stale lockfile
+fails the frozen install itself; and a lockfile without a runnable wrangler
+fails a `bun run wrangler --version` probe — the exact command
+wrangler-action runs for a bun caller to decide whether to install its own —
+which must exit 0 and print a parseable wrangler version. All three run
+before Doppler is reached, so wrangler-action never installs an unpinned
+wrangler in the step that holds the token. The
+workflow is deploy-only — run smoke tests in a `needs: deploy` job in the
+caller (see `examples/rpc-read-proxy/deploy.yml`).
+
+Production only — the workers fleet has no preview environment. The only
+supported trigger is a push to the caller repository's default branch;
+`pull_request`, `workflow_dispatch`, `schedule`, and non-default-branch
+pushes are rejected before Doppler authentication.
+
+Unlike Vercel there is no remote build: wrangler bundles the worker on the
+runner. Worker runtime secrets never pass through this workflow — they are
+synced to Cloudflare out of band with Doppler's DIY Workers flow
+(`doppler secrets --json | jq -c 'with_entries(.value = .value.computed)' |
+wrangler secret bulk`). See `specs/doppler-cloudflare.md` for the full risk
+discussion.
+
+The Cloudflare config is deliberately separate from the Vercel
+`deploy-configs` so neither platform's deploy exports the other's
+credentials onto its runner.
+
+### Usage
+
+```yaml
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      identity-id: ${{ vars.DOPPLER_PRODUCTION_IDENTITY_ID }}
+```
+
+Deploys are serialized by the reusable workflow itself (one job-level
+concurrency group per caller repository, without cancellation), so callers
+need no concurrency block.
+
+Callers grant only `contents: read` and `id-token: write` — wrangler-action
+posts no PR comments and creates no GitHub deployments. Configure
+`DOPPLER_PRODUCTION_IDENTITY_ID` as an Actions repository variable in each
+caller (a repository deploys to one platform, so the name does not collide
+with Vercel callers).
+
+### Inputs
+
+| Name          | Required | Default | Description                                                          |
+| ------------- | -------- | ------- | -------------------------------------------------------------------- |
+| `identity-id` | yes      | —       | Production Doppler service-account identity; loads the shared `cloudflare-deploy-configs`. |
+
+### Outputs
+
+| Name             | Description                                              |
+| ---------------- | -------------------------------------------------------- |
+| `deployment-url` | Production URL from wrangler. Empty for a worker with no `workers.dev` subdomain or route; the first target only for a multi-route worker. |
+
+### Doppler setup
+
+1. In `webops-shared-prod`, create the `cloudflare-deploy-configs` config
+   with `CLOUDFLARE_API_TOKEN` (visibility Masked; Cloudflare permissions:
+   Workers Scripts Edit) and `CLOUDFLARE_ACCOUNT_ID`. Keep ONLY those two
+   values there — every value in the config is fetched onto the runner as a
+   step output.
+2. Keep each worker's runtime secrets in its own Doppler project and sync
+   them with the DIY `wrangler secret bulk` flow, outside this workflow.
+   The deploy identities get no access to those configs.
+3. Create one production identity per repository, as in the Vercel
+   production setup: subject `repo:<org>/<repo>:ref:refs/heads/<default>`,
+   claims `event_name: push`, `ref: refs/heads/<default>`, and
+   `job_workflow_ref: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha>`,
+   with read access only to `webops-shared-prod` /
+   `cloudflare-deploy-configs`.
+4. Pass the identity ID as `identity-id` in the caller.
 
 # Claude code review
 
@@ -241,4 +348,7 @@ and SHA pin. The reusable workflow checks the event, the `/review` or
 `/review-workflow` command, the commenter's access, and the PR origin,
 and fails closed.
 
-See `examples/claude-code-review/` for the caller.
+See `examples/` for the current Katana APR, yvUSD APR, fapy-hook (Vercel),
+rpc-read-proxy (Cloudflare Workers) and claude-code-review shapes.
+See `specs/doppler-vercel.md`, `specs/doppler-cloudflare.md` and
+`specs/claude-code-review.md` for the full operating guides.
