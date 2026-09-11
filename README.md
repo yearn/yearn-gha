@@ -168,9 +168,13 @@ Doppler deploy project:
 the worker's identity is its name in the app repository's `wrangler.toml`,
 so the workflow takes only `identity-id`.
 
-Callers must ship a bun lockfile and a wrangler devDependency. A missing or
-stale lockfile fails `bun install --frozen-lockfile`; a lockfile without
-wrangler fails an explicit assert on `node_modules/.bin/wrangler`. Both run
+Callers must ship a bun lockfile and a wrangler devDependency. A missing
+lockfile fails an explicit `bun.lock`/`bun.lockb` check before the install —
+`--frozen-lockfile` only rejects a lockfile that *would change*, so with none
+present bun would resolve wrangler fresh from the registry; a stale lockfile
+fails the frozen install itself; and a lockfile without a runnable wrangler
+fails a `bunx --no-install wrangler --version` probe, the same probe
+wrangler-action uses to decide whether to install its own. All three run
 before Doppler is reached, so wrangler-action never installs an unpinned
 wrangler in the step that holds the token. The
 workflow is deploy-only — run smoke tests in a `needs: deploy` job in the

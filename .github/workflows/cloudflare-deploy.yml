@@ -70,27 +70,40 @@ jobs:
         with:
           bun-version: "1.3.14"
 
+      # --frozen-lockfile only rejects a lockfile that would change; with no
+      # lockfile at all bun resolves every dependency fresh from the registry,
+      # wrangler included, which defeats the app-lockfile wrangler pin. Assert the
+      # lockfile explicitly, before the install and before any credential.
+      - name: Assert caller ships a bun lockfile
+        run: |
+          if [[ ! -f bun.lock && ! -f bun.lockb ]]; then
+            echo "::error::caller repository must ship bun.lock or bun.lockb; without one bun resolves wrangler fresh from the registry and the wrangler pin is lost" >&2
+            exit 1
+          fi
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # wrangler-action passes no wranglerVersion, so it execs the wrangler
-      # from node_modules/.bin. If the caller has no wrangler dependency the
-      # action would install an unpinned one from npm in the step that already
-      # holds the token. A valid lockfile does not rule that out, so assert it
-      # here, before any credential is fetched.
-      - name: Assert wrangler is installed locally
+      # wrangler-action passes no wranglerVersion, so it decides whether to
+      # install by probing the local wrangler through the package manager. A
+      # wrangler file that exists but fails that probe still triggers an
+      # unpinned install in the step that already holds the token, so run the
+      # same probe here, before any credential is fetched, and require a version.
+      - name: Assert wrangler runs locally
         run: |
-          if [[ ! -x node_modules/.bin/wrangler ]]; then
-            echo "::error::wrangler must be a dependency of the caller repository (pinned in its lockfile); wrangler-action must not install one alongside the deploy token" >&2
+          set -euo pipefail
+          if ! version=$(bunx --no-install wrangler --version 2>&1); then
+            echo "::error::wrangler must be an installed, runnable dependency of the caller repository (pinned in its lockfile); wrangler-action must not install one alongside the deploy token. Probe output: ${version}" >&2
             exit 1
           fi
+          printf 'local wrangler: %s\n' "$version"
 
       # Deploy credentials live alone in cloudflare-deploy-configs: a broader
       # config would pull other secrets onto the runner. The values are read
       # as step outputs, never injected into the job environment; only the
       # validate step (explicit env mapping) and the wrangler-action inputs
       # receive them. With no wranglerVersion input, wrangler-action uses the
-      # wrangler the app repository already installed; the preceding assert is
+      # wrangler the app repository already installed; the preceding probe is
       # what guarantees no install runs in the step that holds the token.
       # Worker runtime secrets are synced to Cloudflare out of
       # band (see specs/doppler-cloudflare.md), never through this workflow.
