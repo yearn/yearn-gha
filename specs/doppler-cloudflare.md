@@ -10,7 +10,7 @@ GitHub Actions builds the worker on the runner and deploys it with wrangler. Git
 
 **Production only — there are no previews.** The workers fleet has no preview environment, so the only supported trigger is a push to the caller repository's default branch. Every other event (`pull_request`, `pull_request_target`, `workflow_dispatch`, `schedule`, non-default-branch pushes) is rejected before Doppler authentication. This is the main event-model difference from the Vercel design.
 
-The fleet uses one **shared account-scoped Cloudflare API token**. Store `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` once in `webops-shared-prod` / `cloudflare-deploy-configs`. The reusable workflow hardcodes both slugs (`.github/workflows/cloudflare-deploy.yml:20-21`) — callers do not pass them. A leaked token can reach every worker in the account.
+The fleet uses one **shared account-scoped Cloudflare API token**. Store `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` once in `webops-shared-prod` / `cloudflare-deploy-configs`. The reusable workflow hardcodes both slugs (`.github/workflows/cloudflare-deploy.yml:22-23`) — callers do not pass them. A leaked token can reach every worker in the account.
 
 **The Cloudflare config is separate from the Vercel `deploy-configs`.** `dopplerhq/secrets-fetch-action` with `inject-env-vars: true` exports every value in the fetched config. One combined config would put the Vercel token on every Cloudflare runner and the Cloudflare token on every Vercel runner. A separate config keeps each platform's blast radius to its own token.
 
