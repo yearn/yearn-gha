@@ -3,6 +3,10 @@ name: Cloudflare Workers deploy
 on:
   workflow_call:
     inputs:
+      project:
+        description: Doppler project holding the worker's runtime secrets in the prd config; they are pushed to Cloudflare with wrangler secret bulk before the deploy.
+        required: true
+        type: string
       identity-id:
         description: Doppler service account identity ID for the production deploy (bound to a push to the default branch).
         required: true
@@ -19,6 +23,7 @@ env:
   # exports the other's credentials onto its runner.
   SHARED_PROJECT: webops-shared-prod
   DEPLOY_CONFIG: cloudflare-deploy-configs
+  SECRETS_CONFIG: prd
 
 jobs:
   deploy:
@@ -111,8 +116,9 @@ jobs:
       # receive them. With no wranglerVersion input, wrangler-action uses the
       # wrangler the app repository already installed; the preceding probe is
       # what guarantees no install runs in the step that holds the token.
-      # Worker runtime secrets are synced to Cloudflare out of
-      # band (see specs/doppler-cloudflare.md), never through this workflow.
+      # Worker runtime secrets are fetched from inputs.project / prd the same
+      # way and pushed with `wrangler secret bulk` before the deploy (see
+      # specs/doppler-cloudflare.md).
       - name: Load shared Cloudflare token and account ID from Doppler
         id: doppler
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
@@ -135,6 +141,31 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Load worker runtime secrets from Doppler
+        id: worker-secrets
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ inputs.identity-id }}
+          doppler-project: ${{ inputs.project }}
+          doppler-config: ${{ env.SECRETS_CONFIG }}
+          inject-env-vars: false
+
+      - name: Push worker runtime secrets to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER_SECRETS: ${{ toJSON(steps.worker-secrets.outputs) }}
+          PROJECT: ${{ inputs.project }}
+        run: |
+          set -euo pipefail
+          secrets=$(jq -c 'del(.DOPPLER_PROJECT, .DOPPLER_CONFIG, .DOPPLER_ENVIRONMENT)' <<<"$WORKER_SECRETS")
+          if [[ "$(jq 'length' <<<"$secrets")" -eq 0 ]]; then
+            echo "::error::no worker secrets resolved from Doppler project ${PROJECT} config ${SECRETS_CONFIG}" >&2
+            exit 1
+          fi
+          printf '%s' "$secrets" | bun run wrangler secret bulk
 
       - name: Deploy to Cloudflare Workers
         id: deploy
