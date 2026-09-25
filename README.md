@@ -58,6 +58,8 @@ permissions:
   id-token: write
   pull-requests: write
 
+cache-mode: none
+
 jobs:
   deploy:
     uses: yearn/yearn-gha/.github/workflows/vercel-deploy.yml@<approved-sha> # pin to the approved full commit SHA
@@ -216,6 +218,8 @@ on:
 permissions:
   contents: read
   id-token: write
+
+cache-mode: none
 
 jobs:
   deploy:
