@@ -82,6 +82,8 @@ permissions:
   contents: read
   id-token: write
 
+cache-mode: none
+
 jobs:
   deploy:
     uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # full commit SHA only

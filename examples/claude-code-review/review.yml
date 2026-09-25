@@ -9,6 +9,8 @@ permissions:
   id-token: write
   pull-requests: write
 
+cache-mode: none
+
 jobs:
   review:
     # Trigger filter, not a security gate: the reusable workflow keeps all

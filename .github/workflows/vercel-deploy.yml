@@ -30,6 +30,7 @@ jobs:
   deploy:
     name: Deploy to Vercel
     runs-on: ubuntu-latest
+    cache-mode: none
     permissions:
       contents: read
       deployments: write
