@@ -32,8 +32,27 @@ Doppler has a managed sync integration for Cloudflare **Pages**, but not for Clo
    - fails with `::error::` if zero secrets remain. This catches a wrong `project` or an empty `prd` config.
    - pipes the JSON to `bun run wrangler secret bulk` on stdin. wrangler prints key names only.
 
+### Workers with no runtime secrets
+
+Some workers have none — every binding they read is declared in `wrangler.toml`
+(plain `[vars]`, a KV namespace, an R2 bucket). `yearn/yearn-uptime-kuma-status`
+is the fleet's example: hostnames, a status-page slug and a cache TTL, all
+non-secret.
+
+For those, the caller sets `sync-secrets: false` and omits `project`. Both the
+`<project>` / `prd` fetch and the push step are skipped, so **no application
+secret reaches the runner at all** — a strictly smaller blast radius than a
+worker that syncs. The deploy identity then needs read on
+`webops-shared-prod` / `cloudflare-deploy-configs` only.
+
+Do not reach for this to work around an empty or mis-named `prd` config. The
+zero-secret check below exists to catch exactly that, and `sync-secrets: false`
+is an explicit, reviewable assertion that the worker has no runtime secrets —
+not a way to silence the check.
+
 Behaviour to know:
 
+- **Zero secrets is an error, not a no-op.** With `sync-secrets` left at `true`, a `prd` config that resolves empty fails the deploy. That catches a wrong `project` or an unpopulated config, rather than shipping a worker whose secrets never arrived.
 - **First deploy.** If the worker does not exist yet, `wrangler secret bulk` creates a draft worker in non-interactive mode. `wrangler deploy` then uploads the code.
 - **Existing secrets.** `wrangler deploy` keeps the secrets already on the worker.
 - **Additive.** `secret bulk` adds and updates keys. It does not delete a key removed from Doppler. Remove stale keys by hand with `wrangler secret delete`.
@@ -98,7 +117,8 @@ Repository variable: `DOPPLER_PRODUCTION_IDENTITY_ID`. Identity IDs are not secr
 
 | Name | Required | Default | Description |
 | ---- | -------- | ------- | ----------- |
-| `project` | yes | — | Doppler project holding the worker's runtime secrets in config `prd`. Every value there is pushed to the worker. |
+| `project` | unless `sync-secrets` is false | — | Doppler project holding the worker's runtime secrets in config `prd`. Every value there is pushed to the worker. |
+| `sync-secrets` | no | `true` | Whether the worker has runtime secrets to push. `false` skips both the `<project>` / `prd` fetch and the push step. |
 | `identity-id` | yes | — | Production Doppler service-account identity; used for the shared `cloudflare-deploy-configs` fetch and the `<project>` / `prd` fetch. |
 
 Output: `deployment-url` (production URL).
@@ -130,9 +150,11 @@ Keep only those two values in the config: every value in it is fetched onto the 
 
 One Doppler project per worker, passed as the `project` input. Its `prd` config holds the worker's runtime secrets. The workflow pushes every value in `prd` to the worker with `wrangler secret bulk` on each deploy, so keep only runtime secrets there. Set each value to Masked. The deploy identity gets read access to `<project>` / `prd`.
 
+A worker with no runtime secrets needs no application project at all: its caller sets `sync-secrets: false`, and its identity is granted read on `webops-shared-prod` / `cloudflare-deploy-configs` only. Do not create an empty `prd` config for it.
+
 ### Service accounts, identities, and OIDC
 
-Create one production Doppler service-account identity per worker repository. Grant the underlying service account read-only access to exactly two configs: `webops-shared-prod` / `cloudflare-deploy-configs` and `<project>` / `prd`.
+Create one production Doppler service-account identity per worker repository. Grant the underlying service account read-only access to exactly two configs: `webops-shared-prod` / `cloudflare-deploy-configs` and `<project>` / `prd`. For a `sync-secrets: false` caller, grant the first only.
 
 The identity uses:
 

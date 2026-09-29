@@ -202,6 +202,15 @@ draft worker. The sync is additive: a key removed from Doppler stays on the
 worker until deleted by hand. See `specs/doppler-cloudflare.md` for the full
 risk discussion.
 
+A worker with no runtime secrets — every binding declared in its
+`wrangler.toml` — sets `sync-secrets: false` and omits `project`. Both the
+`<project>` / `prd` fetch and the push step are skipped, so no application
+secret reaches the runner, and the deploy identity needs read on
+`cloudflare-deploy-configs` only (see
+`examples/uptime-kuma-status/deploy.yml`). With `sync-secrets` left at its
+`true` default, a `prd` config that resolves empty still fails the deploy —
+that check is what catches a wrong `project`.
+
 The Cloudflare config is deliberately separate from the Vercel
 `deploy-configs` so neither platform's deploy exports the other's
 credentials onto its runner.

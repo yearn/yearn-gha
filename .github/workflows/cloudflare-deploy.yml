@@ -4,9 +4,19 @@ on:
   workflow_call:
     inputs:
       project:
-        description: Doppler project holding the worker's runtime secrets in the prd config; they are pushed to Cloudflare with wrangler secret bulk before the deploy.
-        required: true
+        description: Doppler project holding the worker's runtime secrets in the prd config; they are pushed to Cloudflare with wrangler secret bulk before the deploy. Required unless sync-secrets is false.
+        required: false
+        default: ""
         type: string
+      sync-secrets:
+        description: >-
+          Whether the worker has runtime secrets to push from <project>/prd.
+          Set false only for a worker whose every binding is declared in
+          wrangler.toml; the deploy then never fetches <project>/prd, so no
+          application secret reaches the runner at all.
+        required: false
+        default: true
+        type: boolean
       identity-id:
         description: Doppler service account identity ID for the production deploy (bound to a push to the default branch).
         required: true
@@ -56,6 +66,16 @@ jobs:
         run: |
           printf '::error::deploys are only allowed for a push to the default branch (%s); got %s on %s\n' \
             "$DEFAULT_BRANCH" "$EVENT_NAME" "$REF" >&2
+          exit 1
+
+      # `project` is only meaningful when there are secrets to fetch, so it is
+      # not a required input — but a caller that syncs secrets and forgets it
+      # would otherwise fetch project "" and fail later, inside the step that
+      # holds the deploy token. Fail here instead, before any credential.
+      - name: Validate inputs
+        if: inputs.sync-secrets && inputs.project == ''
+        run: |
+          echo "::error::project is required when sync-secrets is true; pass the Doppler project holding the worker's runtime secrets, or set sync-secrets: false for a worker with none" >&2
           exit 1
 
       - name: Checkout app repository
@@ -120,7 +140,9 @@ jobs:
       # installed; the preceding probe is what guarantees no install runs in
       # the steps that hold the token.
       # Worker runtime secrets are fetched from inputs.project / prd the same
-      # way and pushed with `wrangler secret bulk` before the deploy (see
+      # way and pushed with `wrangler secret bulk` before the deploy, unless
+      # the caller sets sync-secrets: false, in which case neither step runs
+      # and no application secret is fetched at all (see
       # specs/doppler-cloudflare.md).
       - name: Load shared Cloudflare token and account ID from Doppler
         id: doppler
@@ -147,6 +169,7 @@ jobs:
 
       - name: Load worker runtime secrets from Doppler
         id: worker-secrets
+        if: inputs.sync-secrets
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
         with:
           auth-method: oidc
@@ -156,6 +179,7 @@ jobs:
           inject-env-vars: false
 
       - name: Push worker runtime secrets to Cloudflare
+        if: inputs.sync-secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
