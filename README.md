@@ -252,8 +252,9 @@ with Vercel callers).
 
 | Name          | Required | Default | Description                                                          |
 | ------------- | -------- | ------- | -------------------------------------------------------------------- |
-| `project`     | yes      | —       | Doppler project holding the worker's runtime secrets in `prd`; every value there is pushed to the worker. |
-| `identity-id` | yes      | —       | Production Doppler service-account identity; loads the shared `cloudflare-deploy-configs` and `<project>` / `prd`. |
+| `project`     | unless `sync-secrets` is false | — | Doppler project holding the worker's runtime secrets in `prd`; every value there is pushed to the worker. |
+| `sync-secrets` | no      | `true`  | Whether the worker has runtime secrets to push. `false` skips both the `<project>` / `prd` fetch and the push step. |
+| `identity-id` | yes      | —       | Production Doppler service-account identity; loads the shared `cloudflare-deploy-configs`, and `<project>` / `prd` unless `sync-secrets` is false. |
 
 ### Outputs
 
@@ -270,15 +271,18 @@ with Vercel callers).
    step output.
 2. Keep each worker's runtime secrets in `<project>` / `prd` (visibility
    Masked). Keep ONLY runtime secrets there — every value is pushed to the
-   worker. The production identity gets read access to it.
+   worker. The production identity gets read access to it. A worker with no
+   runtime secrets skips this step: its caller sets `sync-secrets: false`.
+   Do not create an empty `prd` config for it.
 3. Create one production identity per repository, as in the Vercel
    production setup: subject `repo:<org>/<repo>:ref:refs/heads/<default>`,
    claims `event_name: push`, `ref: refs/heads/<default>`, and
    `job_workflow_ref: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha>`,
    with read access to `webops-shared-prod` / `cloudflare-deploy-configs`
-   and `<project>` / `prd`.
+   and `<project>` / `prd` (the first only for a `sync-secrets: false` caller).
 4. Pass the identity ID as `identity-id` and the Doppler project as
-   `project` in the caller.
+   `project` in the caller, or `sync-secrets: false` and no `project` for a
+   worker with no runtime secrets.
 
 # Claude code review
 

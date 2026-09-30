@@ -10,11 +10,11 @@ GitHub Actions builds the worker on the runner and deploys it with wrangler. Git
 
 **Production only — there are no previews.** The workers fleet has no preview environment, so the only supported trigger is a push to the caller repository's default branch. Every other event (`pull_request`, `pull_request_target`, `workflow_dispatch`, `schedule`, non-default-branch pushes) is rejected before Doppler authentication. This is the main event-model difference from the Vercel design.
 
-The fleet uses one **shared account-scoped Cloudflare API token**. Store `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` once in `webops-shared-prod` / `cloudflare-deploy-configs`. The reusable workflow hardcodes both slugs (`.github/workflows/cloudflare-deploy.yml:24-25`) — callers do not pass them. A leaked token can reach every worker in the account.
+The fleet uses one **shared account-scoped Cloudflare API token**. Store `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` once in `webops-shared-prod` / `cloudflare-deploy-configs`. The reusable workflow hardcodes both slugs (`.github/workflows/cloudflare-deploy.yml:34-35`) — callers do not pass them. A leaked token can reach every worker in the account.
 
 **The Cloudflare config is separate from the Vercel `deploy-configs`.** `dopplerhq/secrets-fetch-action` exports every value in the fetched config. One combined config would put the Vercel token on every Cloudflare runner and the Cloudflare token on every Vercel runner. A separate config keeps each platform's blast radius to its own token.
 
-There is no per-app Doppler deploy config. Vercel needs a per-app `VERCEL_PROJECT_ID`; a worker's identity is its name in the app repository's `wrangler.toml`. The `project` input names only the Doppler project that holds the worker's runtime secrets in config `prd` (hardcoded at `.github/workflows/cloudflare-deploy.yml:26`).
+There is no per-app Doppler deploy config. Vercel needs a per-app `VERCEL_PROJECT_ID`; a worker's identity is its name in the app repository's `wrangler.toml`. The `project` input names only the Doppler project that holds the worker's runtime secrets in config `prd` (hardcoded at `.github/workflows/cloudflare-deploy.yml:36`).
 
 The guide distinguishes three kinds of data:
 
