@@ -159,7 +159,7 @@ jobs:
           jq -r --arg repo "$REPO" \
             '(.closingIssuesReferences // [])[] | select("\(.repository.owner.login)/\(.repository.name)" == $repo) | .number' \
             "$dir/pr.json" \
-            | while read -r n; do gh issue view "$n" --repo "$REPO" --json number,title,body; done \
+            | while read -r n; do gh issue view "$n" --repo "$REPO" --json number,title,body || true; done \
             | jq -s . > "$dir/issues.json"
           exclude=(':(exclude)*.lock' ':(exclude)*lock.json' ':(exclude)*lock.yaml')
           git diff --no-ext-diff "${base_sha}...HEAD" -- . "${exclude[@]}" > "$dir/pr.diff"
