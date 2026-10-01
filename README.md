@@ -369,7 +369,9 @@ To rotate, run `claude setup-token` again (requires a Claude subscription) and
 update that one Doppler secret; every caller picks up the new value on its
 next run. The workflow fails fast if the token resolves empty.
 
-There are no inputs; the prompt, tool allowlist, and gates live only in the
+The only input is `runs-on` (default `ubuntu-latest`). The Workflow tool runs
+at most `min(16, CPUs - 2)` agents at once, so a larger runner speeds up
+`/review-workflow`. The prompt, tool allowlist, and gates live only in the
 reusable workflow. The caller supplies the `issue_comment` trigger, permissions,
 and SHA pin. The reusable workflow checks the event, the `/review` or
 `/review-workflow` command, the commenter's access, and the PR origin,
