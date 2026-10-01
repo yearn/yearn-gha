@@ -2,12 +2,25 @@ name: Claude code review
 
 on:
   workflow_call:
+    inputs:
+      # The Workflow tool runs at most min(16, CPUs - 2) agents at once, so the
+      # default 4-vCPU runner serializes review-pr-workflow to two agents.
+      runs-on:
+        description: Runner label. A larger runner raises the review's agent concurrency.
+        type: string
+        default: ubuntu-latest
 
 jobs:
   review:
     name: Claude code review
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 75
+    # Reviews share one OAuth token; queue them per repository instead of
+    # running them side by side. GitHub keeps one pending run per group, so a
+    # third trigger replaces the queued one.
+    concurrency:
+      group: claude-code-review-${{ github.repository }}
+      cancel-in-progress: false
     cache-mode: none
     permissions:
       contents: read
@@ -29,7 +42,7 @@ jobs:
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
         --model opus
-        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,TaskOutput,TaskStop,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
+        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,TaskOutput,TaskStop,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git diff:*),Bash(git blame:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
     steps:
       # Coarse gate: only PR comments whose body starts with /review.
       # The next step accepts only /review and /review-workflow.
@@ -121,17 +134,45 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
             fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
-      # The prompt is built here, after the base is fetched: the pinned action
+      # Resolved here, after the base is fetched: the pinned action
       # shallow-fetches its own resolved base branch before Claude runs, so a
       # symbolic base ref can lose its merge base mid-run. Resolve it once to an
       # immutable SHA instead.
-      - name: Build review prompt
+      #
+      # The sandbox has no network, so the allowlisted gh verbs fail inside the
+      # review and linked issue specs never reach it. Fetch the PR context here
+      # and hand it over as files.
+      - name: Prefetch review context
         env:
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           BASE_REF: ${{ env.PR_BASE_REF }}
         run: |
           set -euo pipefail
           base_sha="$(git merge-base "origin/${BASE_REF}" HEAD)"
+          echo "BASE_SHA=$base_sha" >> "$GITHUB_ENV"
+          dir="$HOME/review-context"
+          echo "REVIEW_CONTEXT_DIR=$dir" >> "$GITHUB_ENV"
+          mkdir -p "$dir"
+          gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json number,title,body,url,closingIssuesReferences > "$dir/pr.json"
+          jq -r --arg repo "$REPO" \
+            '(.closingIssuesReferences // [])[] | select("\(.repository.owner.login)/\(.repository.name)" == $repo) | .number' \
+            "$dir/pr.json" \
+            | while read -r n; do gh issue view "$n" --repo "$REPO" --json number,title,body; done \
+            | jq -s . > "$dir/issues.json"
+          exclude=(':(exclude)*.lock' ':(exclude)*lock.json' ':(exclude)*lock.yaml')
+          git diff --no-ext-diff "${base_sha}...HEAD" -- . "${exclude[@]}" > "$dir/pr.diff"
+          git diff --stat "${base_sha}...HEAD" > "$dir/diffstat.txt"
+          git diff --name-only "${base_sha}...HEAD" > "$dir/changed-files.txt"
+          wc -c "$dir"/*
+
+      - name: Build review prompt
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          base_sha="$BASE_SHA"
           {
             echo "REVIEW_PROMPT<<PROMPT_EOF"
             printf '%s\n' "Review https://github.com/${REPO}/pull/${PR_NUMBER} using the ${REVIEW_SKILL} skill."
@@ -139,12 +180,14 @@ jobs:
             echo "This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval."
             printf '%s\n' "Diff against ${base_sha}."
             echo "There is no network access and no browser: skip visual verification, and report npm-policy size or maintenance lookups as \"not verifiable in CI\" rather than estimating them."
+            printf '%s\n' "PR context is prefetched in ${REVIEW_CONTEXT_DIR}: pr.json, issues.json (linked issue specs), pr.diff, diffstat.txt, changed-files.txt. Read it instead of calling gh."
             echo "Once, via Bash, run: cat .git/config"
             echo "Add one line to the review: gitconfig-mask: sentinel if the origin credential is a placeholder, gitconfig-mask: unreadable if the read failed, gitconfig-mask: visible if a real token is visible. Never paste a token or an authenticated URL."
             if [[ "$REVIEW_SKILL" == "review-pr-workflow" ]]; then
-              echo "Use the Workflow tool to run the skill. It returns a task id and runs in the background."
-              echo "Then call TaskOutput on that id with block=true and timeout=600000, repeating until it reports the workflow finished, and assemble the review from its result."
-              echo "Your final reply must contain the assembled review; never end the turn while the workflow is still running."
+              echo "Use the Workflow tool to run the skill, with maxVerifyPerLens: 3 in its args. It returns a task id and runs in the background."
+              echo "Then call TaskOutput on that id with block=true and timeout=600000, at most 4 times, and assemble the review from its result."
+              echo "If it is still running after the fourth call, call TaskStop on it and reply only: Review incomplete: review-pr-workflow did not finish within the CI time budget."
+              echo "Otherwise never end the turn while the workflow is still running."
             else
               echo "Do not start a Workflow. Run the skill in this session and finish here."
             fi
@@ -235,8 +278,11 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v socat
 
+      # Step timeout below the job's: a timed-out step fails instead of
+      # cancelling the job, so the closing steps still post the outcome.
       - name: Run Claude code review
         id: claude
+        timeout-minutes: 60
         continue-on-error: true
         uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c # v1.0.193
         with:
