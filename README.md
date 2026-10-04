@@ -375,6 +375,28 @@ and SHA pin. The reusable workflow checks the event, the `/review` or
 `/review-workflow` command, the commenter's access, and the PR origin,
 and fails closed.
 
+
+## Aderyn analysis
+
+Reusable Solidity static analysis via a **pinned** Cyfrin/aderyn CLI release
+(tag + SHA-256 of the linux x86_64 tarball). Complements Slither; does not
+cover Vyper.
+
+Not using `Cyfrin/aderyn-ci` — that action runs `npm install -g @cyfrin/aderyn@0.6`
+(floating minor + npm lifecycle scripts), which this repo's pin rules reject.
+
+Default `fail-on: high`. Vendored `lib` excluded by default (`path-excludes`).
+
+### Usage
+
+```yaml
+jobs:
+  analyze:
+    uses: yearn/yearn-gha/.github/workflows/aderyn.yml@<approved-sha> # pin to the approved full commit SHA
+```
+
+See `examples/aderyn.yml` and `specs/aderyn.md`.
+
 See `examples/` for the current Katana APR, yvUSD APR, fapy-hook (Vercel),
 rpc-read-proxy (Cloudflare Workers) and claude-code-review shapes.
 See `specs/doppler-vercel.md`, `specs/doppler-cloudflare.md` and
