@@ -375,6 +375,23 @@ and SHA pin. The reusable workflow checks the event, the `/review` or
 `/review-workflow` command, the commenter's access, and the PR origin,
 and fails closed.
 
+
+## Python CI
+
+Reusable Python CI modeled on `yearn/monitoring` `.github/workflows/ci.yml`:
+`ruff check`, `ruff format --check`, `ty check`, `uv audit`, and `pytest`, as
+three jobs (`test` / `lint` / `audit`).
+
+### Usage
+
+```yaml
+jobs:
+  ci:
+    uses: yearn/yearn-gha/.github/workflows/python-ci.yml@<approved-sha> # pin to the approved full commit SHA
+```
+
+See `examples/python-ci.yml` and `specs/python-ci.md`.
+
 See `examples/` for the current Katana APR, yvUSD APR, fapy-hook (Vercel),
 rpc-read-proxy (Cloudflare Workers) and claude-code-review shapes.
 See `specs/doppler-vercel.md`, `specs/doppler-cloudflare.md` and
