@@ -11,6 +11,14 @@ on:
         description: Doppler service account identity ID matching the deploy environment (preview identity for pull requests, production identity for the default branch).
         required: true
         type: string
+      preview-deployment-name:
+        description: GitHub deployment environment name for pull request deploys. Defaults to `preview`.
+        required: false
+        type: string
+      production-deployment-name:
+        description: GitHub deployment environment name for default-branch deploys. Defaults to `production`.
+        required: false
+        type: string
     outputs:
       deployment-url:
         description: Preview or production URL returned by Vercel.
@@ -117,4 +125,4 @@ jobs:
           github-token: ${{ github.token }}
           github-comment: true
           github-deployment: true
-          github-deployment-environment: ${{ env.DEPLOY_ENV }}
+          github-deployment-environment: ${{ env.DEPLOY_ENV == 'production' && (inputs.production-deployment-name || 'production') || (inputs.preview-deployment-name || 'preview') }}

@@ -83,6 +83,8 @@ production.
 | ------------- | -------- | ------- | --------------------------------------------------------------------------- |
 | `project`     | yes      | —       | Doppler project containing `VERCEL_PROJECT_ID` in `deploy-configs`.         |
 | `identity-id` | yes      | —       | Doppler service-account identity for the event; loads shared + app `deploy-configs`. |
+| `preview-deployment-name` | no | `preview` | GitHub deployment environment for pull request deploys. Match it to any required deployment in branch protection. |
+| `production-deployment-name` | no | `production` | GitHub deployment environment for default-branch deploys. |
 
 ### Outputs
 
