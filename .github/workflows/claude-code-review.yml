@@ -25,11 +25,11 @@ jobs:
       # the org; read access on the review config only.
       DOPPLER_IDENTITY_ID: 11d2108f-ddc2-48f6-ad9c-e7fde0043741
       WEBOPS_SKILLS_REPO: yearn/webops-skills
-      WEBOPS_SKILLS_SHA: db24a2a64c812bc099ee2efd7fa32fc4ad0860e2
+      WEBOPS_SKILLS_SHA: 6263cd4bba719365722713314a309c6827687114
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
         --model opus
-        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,TaskOutput,TaskStop,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
+        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,TaskOutput,TaskStop,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(git diff:*),Bash(git blame:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
     steps:
       # Coarse gate: only PR comments whose body starts with /review.
       # The next step accepts only /review and /review-workflow.
@@ -121,27 +121,61 @@ jobs:
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth}" \
             fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 
-      # The prompt is built here, after the base is fetched: the pinned action
-      # shallow-fetches its own resolved base branch before Claude runs, so a
-      # symbolic base ref can lose its merge base mid-run. Resolve it once to an
-      # immutable SHA instead.
-      - name: Build review prompt
+      # The pinned action shallow-fetches its own resolved base branch before
+      # Claude runs, so a symbolic base ref can lose its merge base mid-run.
+      # Resolve it once to an immutable SHA instead.
+      #
+      # The sandbox has no network and no GitHub token, so everything the
+      # skills would fetch with gh is fetched here, on the runner, and handed
+      # over as files. Opening sandbox network would not help (gh stays
+      # unauthenticated) and would give PR content an outbound channel.
+      - name: Prefetch PR context
         env:
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           BASE_REF: ${{ env.PR_BASE_REF }}
         run: |
           set -euo pipefail
           base_sha="$(git merge-base "origin/${BASE_REF}" HEAD)"
+          echo "BASE_SHA=$base_sha" >> "$GITHUB_ENV"
+          ctx="$GITHUB_WORKSPACE/.pr-context"
+          mkdir -p "$ctx"
+          gh pr view "$PR_NUMBER" --repo "$REPO" --json number,title,body,url > "$ctx/pr.json"
+          gh pr view "$PR_NUMBER" --repo "$REPO" --json closingIssuesReferences \
+            --jq '.closingIssuesReferences[].number' |
+            while read -r n; do
+              gh issue view "$n" --repo "$REPO" --json number,title,body
+            done | jq -s . > "$ctx/issues.json"
+          git diff "$base_sha"...HEAD > "$ctx/pr.diff"
+          git diff --stat "$base_sha"...HEAD > "$ctx/diffstat.txt"
+          git diff --name-only "$base_sha"...HEAD > "$ctx/changed-files.txt"
+          git log --format=%h "$base_sha"..HEAD > "$ctx/blame-commits.txt"
+          # ponytail: npm lockfiles only; bun/pnpm need their CLI installed first
+          if grep -qE '(^|/)(package\.json|package-lock\.json)$' "$ctx/changed-files.txt" && [[ -f package-lock.json ]]; then
+            npm audit --json --package-lock-only > "$ctx/audit.json" || true
+            [[ -s "$ctx/audit.json" ]] || rm -f "$ctx/audit.json"
+          fi
+          ls -la "$ctx"
+
+      - name: Build review prompt
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          base_sha="$BASE_SHA"
           {
             echo "REVIEW_PROMPT<<PROMPT_EOF"
             printf '%s\n' "Review https://github.com/${REPO}/pull/${PR_NUMBER} using the ${REVIEW_SKILL} skill."
             echo
             echo "This is non-interactive CI. The PR branch is already checked out. Do not post to GitHub. Do not ask questions. Do not wait for approval."
             printf '%s\n' "Diff against ${base_sha}."
+            echo "Prefetched context directory: .pr-context/ — read PR metadata, linked issues, diff, and commit list from it. Never call gh."
+            echo "run-checks=false: dependencies are not installed, so do not run lint, tests, or typecheck."
             echo "There is no network access and no browser: skip visual verification, and report npm-policy size or maintenance lookups as \"not verifiable in CI\" rather than estimating them."
             echo "Once, via Bash, run: cat .git/config"
             echo "Add one line to the review: gitconfig-mask: sentinel if the origin credential is a placeholder, gitconfig-mask: unreadable if the read failed, gitconfig-mask: visible if a real token is visible. Never paste a token or an authenticated URL."
             if [[ "$REVIEW_SKILL" == "review-pr-workflow" ]]; then
+              echo "Pass maxVerifyPerLens=2 to the workflow."
               echo "Use the Workflow tool to run the skill. It returns a task id and runs in the background."
               echo "Then call TaskOutput on that id with block=true and timeout=600000, repeating until it reports the workflow finished, and assemble the review from its result."
               echo "Your final reply must contain the assembled review; never end the turn while the workflow is still running."
