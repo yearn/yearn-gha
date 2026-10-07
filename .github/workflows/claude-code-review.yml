@@ -25,7 +25,7 @@ jobs:
       # the org; read access on the review config only.
       DOPPLER_IDENTITY_ID: 11d2108f-ddc2-48f6-ad9c-e7fde0043741
       WEBOPS_SKILLS_REPO: yearn/webops-skills
-      WEBOPS_SKILLS_SHA: 003939db9621a03b9f62d756dae6d11e7f5064f1
+      WEBOPS_SKILLS_SHA: db24a2a64c812bc099ee2efd7fa32fc4ad0860e2
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
         --model opus
