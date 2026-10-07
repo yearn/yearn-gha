@@ -316,6 +316,14 @@ access. It also auto-approves commands, so the `Bash(...)` entries in
 `--allowedTools` describe intent, not an enforced boundary — observed runs
 run `cat`, which is not allowlisted.
 
+Because the sandbox has no network and no token, a step before the action
+prefetches what the skills would otherwise fetch with `gh` into
+`.pr-context/` in the workspace: `pr.json`, `issues.json`, `pr.diff`,
+`diffstat.txt`, `changed-files.txt`, `blame-commits.txt`, and `audit.json`
+(`bun audit` or `npm audit`, only when a manifest or lockfile changed). The prompt
+points the skill at that directory and sets `run-checks=false`, since
+dependencies are not installed.
+
 Claude's own `Read`/`Grep`/`Glob` are not sandboxed. `settings` deny rules
 keep them out of `/proc`, `/sys`, the runner file-command directory, and
 `.config`. They are not kept out of `.git`: the pinned action writes an
