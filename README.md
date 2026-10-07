@@ -377,6 +377,29 @@ and SHA pin. The reusable workflow checks the event, the `/review` or
 `/review-workflow` command, the commenter's access, and the PR origin,
 and fails closed.
 
+
+## Vyper CI
+
+Reusable Vyper compile/test workflow modeled on
+`yearn/yearn-vesting-escrow` `.github/workflows/test.yaml` (`setup-uv`, pinned
+Python, `uv sync --locked`, compile, optional pytest).
+
+The **Vyper compiler pin lives in the caller** (`pyproject` / `uv.lock`).
+Slither and Aderyn do not cover `.vy`.
+
+### Usage
+
+```yaml
+jobs:
+  contracts:
+    uses: yearn/yearn-gha/.github/workflows/vyper-ci.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      compile-command: uv run --locked vesting-escrow-compile
+      test-command: uv run --locked pytest
+```
+
+See `examples/vyper-ci.yml` and `specs/vyper-ci.md`.
+
 See `examples/` for the current Katana APR, yvUSD APR, fapy-hook (Vercel),
 rpc-read-proxy (Cloudflare Workers) and claude-code-review shapes.
 See `specs/doppler-vercel.md`, `specs/doppler-cloudflare.md` and
