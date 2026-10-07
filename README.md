@@ -377,6 +377,56 @@ and SHA pin. The reusable workflow checks the event, the `/review` or
 `/review-workflow` command, the commenter's access, and the PR origin,
 and fails closed.
 
+
+## Slither analysis
+
+Reusable Solidity static analysis via `crytic/slither-action`, modeled on
+`yearn/yBOLD` `.github/workflows/slither.yml` (`fail-on: medium`, Foundry
+install, recursive submodules). Does **not** copy
+`yearn/yearn-vaults-v3` `.github/workflows/slither.yaml` (`continue-on-error`,
+old action pin).
+
+Vendored `lib/` is excluded by default (`filter-paths` input; set empty to
+disable). The job requests `contents: read` only and holds no secrets. Slither
+does not cover Vyper.
+
+### Usage
+
+```yaml
+name: Slither
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: slither-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    uses: yearn/yearn-gha/.github/workflows/slither.yml@<approved-sha> # pin to the approved full commit SHA
+```
+
+### Inputs
+
+| Name | Required | Default | Description |
+| ---- | -------- | ------- | ----------- |
+| `target` | no | `.` | Project path for Slither. |
+| `fail-on` | no | `medium` | Severity floor that fails the job. |
+| `filter-paths` | no | `lib/` | `--filter-paths` value; empty disables. |
+| `slither-args` | no | `""` | Extra Slither CLI args. |
+| `slither-config` | no | `""` | Optional Slither config path. |
+| `install-foundry` | no | `true` | Install Foundry before Slither. |
+| `foundry-version` | no | `stable` | Foundry version channel. |
+| `submodules` | no | `recursive` | Checkout submodule mode. |
+
+See `examples/slither.yml` and `specs/slither.md`.
+
 See `examples/` for the current Katana APR, yvUSD APR, fapy-hook (Vercel),
 rpc-read-proxy (Cloudflare Workers) and claude-code-review shapes.
 See `specs/doppler-vercel.md`, `specs/doppler-cloudflare.md` and

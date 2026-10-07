@@ -1,0 +1,94 @@
+name: Slither analysis
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: Path of the project Slither should analyze, relative to the repo root.
+        required: false
+        type: string
+        default: .
+      fail-on:
+        description: Fail the job if Slither finds findings of this severity or higher (high, medium, low, info, none, all).
+        required: false
+        type: string
+        default: medium
+      filter-paths:
+        description: >-
+          Paths Slither should ignore, passed as --filter-paths. Defaults to
+          vendored Foundry libs under lib/. Set to an empty string to disable.
+        required: false
+        type: string
+        default: lib/
+      slither-args:
+        description: Extra arguments appended to the Slither invocation after --filter-paths.
+        required: false
+        type: string
+        default: ""
+      slither-config:
+        description: Path to a Slither configuration file. Leave empty to use ./slither.config.json when present.
+        required: false
+        type: string
+        default: ""
+      install-foundry:
+        description: Install Foundry before Slither (needed for Foundry projects).
+        required: false
+        type: boolean
+        default: true
+      foundry-version:
+        description: Foundry toolchain version passed to foundry-rs/foundry-toolchain.
+        required: false
+        type: string
+        default: stable
+      submodules:
+        description: Checkout submodules (false, true, or recursive).
+        required: false
+        type: string
+        default: recursive
+
+jobs:
+  analyze:
+    name: Slither analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: ${{ inputs.submodules }}
+          persist-credentials: false
+
+      - name: Install Foundry
+        if: inputs.install-foundry
+        uses: foundry-rs/foundry-toolchain@8b0419c685ef46cb79ec93fbdc131174afceb730 # v1.6.0
+        with:
+          version: ${{ inputs.foundry-version }}
+
+      # Compose --filter-paths and any caller extras into one string for the
+      # action. Values travel through env so they are not interpolated into the
+      # shell script as raw text.
+      - name: Build Slither args
+        id: args
+        env:
+          FILTER_PATHS: ${{ inputs.filter-paths }}
+          EXTRA_ARGS: ${{ inputs.slither-args }}
+        run: |
+          set -euo pipefail
+          out=""
+          if [[ -n "${FILTER_PATHS}" ]]; then
+            out+="--filter-paths ${FILTER_PATHS}"
+          fi
+          if [[ -n "${EXTRA_ARGS}" ]]; then
+            out+="${out:+ }${EXTRA_ARGS}"
+          fi
+          echo "slither-args=${out}" >> "$GITHUB_OUTPUT"
+
+      - name: Slither analysis
+        uses: crytic/slither-action@b52cc1cbfee9ca3e8722dd5224299d16c9a6b80f # v0.4.2
+        with:
+          target: ${{ inputs.target }}
+          fail-on: ${{ inputs.fail-on }}
+          slither-args: ${{ steps.args.outputs.slither-args }}
+          slither-config: ${{ inputs.slither-config }}
