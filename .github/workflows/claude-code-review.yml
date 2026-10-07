@@ -150,12 +150,33 @@ jobs:
           git diff --stat "$base_sha"...HEAD > "$ctx/diffstat.txt"
           git diff --name-only "$base_sha"...HEAD > "$ctx/changed-files.txt"
           git log --format=%h "$base_sha"..HEAD > "$ctx/blame-commits.txt"
-          # ponytail: npm lockfiles only; bun/pnpm need their CLI installed first
-          if grep -qE '(^|/)(package\.json|package-lock\.json)$' "$ctx/changed-files.txt" && [[ -f package-lock.json ]]; then
-            npm audit --json --package-lock-only > "$ctx/audit.json" || true
-            [[ -s "$ctx/audit.json" ]] || rm -f "$ctx/audit.json"
+          if grep -qE '(^|/)(package\.json|package-lock\.json|bun\.lock)$' "$ctx/changed-files.txt"; then
+            if [[ -f bun.lock ]]; then
+              echo "AUDIT_PM=bun" >> "$GITHUB_ENV"
+            elif [[ -f package-lock.json ]]; then
+              echo "AUDIT_PM=npm" >> "$GITHUB_ENV"
+            fi
           fi
           ls -la "$ctx"
+
+      - name: Set up Bun for dependency audit
+        if: ${{ env.AUDIT_PM == 'bun' }}
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      # Audit reads the lockfile only; no install, no lifecycle scripts. Both
+      # CLIs exit non-zero when advisories exist, so the JSON is kept on any
+      # exit and dropped only when empty.
+      - name: Capture dependency audit
+        if: ${{ env.AUDIT_PM != '' }}
+        run: |
+          set -uo pipefail
+          out="$GITHUB_WORKSPACE/.pr-context/audit.json"
+          case "$AUDIT_PM" in
+            bun) bun audit --json > "$out" ;;
+            npm) npm audit --json --package-lock-only > "$out" ;;
+          esac
+          [[ -s "$out" ]] || rm -f "$out"
+          ls -la "$GITHUB_WORKSPACE/.pr-context"
 
       - name: Build review prompt
         env:
