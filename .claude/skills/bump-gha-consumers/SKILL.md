@@ -8,10 +8,11 @@ description: Bump the pinned yearn/yearn-gha SHA in every yearn repo that calls 
 Run `bump.sh` from this skill dir.
 
 ```
-./bump.sh [--sha <sha>] [--dry-run] [--no-merge]
+./bump.sh [--path <dir>] [--sha <sha>] [--dry-run] [--no-merge]
 ```
 
 - `--sha`: target SHA. Default: `origin/main` HEAD of yearn/yearn-gha.
+- `--path`: dir holding local checkouts (`<dir>/<repo>`). Missing repo → cloned there. Always temp worktree off `origin/<default>`, removed after.
 - `--dry-run`: find consumers, print the diff per repo. No clone push, no PR, no merge.
 - `--no-merge`: open PRs, skip merge.
 
