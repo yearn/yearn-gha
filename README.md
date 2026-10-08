@@ -299,8 +299,9 @@ Reviews are on demand. A collaborator comments `/review` or
 `/review-workflow` on a pull request, and the caller workflow dispatches
 the reusable workflow. The first token selects the skill:
 `/review` runs `review-pr` (single pass; better for small diffs);
-`/review-workflow` runs `review-pr-workflow` (fan-out). The workflow
-checks out the PR head, installs `review-pr`, `review-pr-workflow`, and
+`/review-workflow` runs `review-pr-lean` (fan-out; its prep runs on the
+runner, outside the sandbox). The workflow
+checks out the PR head, installs `review-pr`, `review-pr-lean`, and
 `npm-policy` from `yearn/webops-skills` at a pinned SHA, and reads the
 review from the action's result text. A follow-up step posts that body
 with `gh pr comment`. The action prompt is only the invocation plus CI
