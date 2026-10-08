@@ -25,11 +25,11 @@ jobs:
       # the org; read access on the review config only.
       DOPPLER_IDENTITY_ID: 11d2108f-ddc2-48f6-ad9c-e7fde0043741
       WEBOPS_SKILLS_REPO: yearn/webops-skills
-      WEBOPS_SKILLS_SHA: 6263cd4bba719365722713314a309c6827687114
+      WEBOPS_SKILLS_SHA: 94ec38994f92dfc95e025fa98e774c8b4e31facd
       DEFAULT_CLAUDE_ARGS: |
         --setting-sources user
         --model opus
-        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,TaskOutput,TaskStop,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(git diff:*),Bash(git blame:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
+        --allowedTools "Read,Grep,Glob,Skill,Task,Agent,Workflow,TaskOutput,TaskStop,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git rev-parse:*),Bash(git merge-base:*),Bash(git ls-files:*),Bash(git diff:*),Bash(git blame:*),Bash(node /home/runner/.claude/skills/review-pr-lean/scripts/review.mjs provenance:*),Bash(npm run lint:*),Bash(bun run lint:*),Bash(pnpm run lint:*),Bash(yarn lint:*),Bash(yarn run lint:*)"
     steps:
       # Coarse gate: only PR comments whose body starts with /review.
       # The next step accepts only /review and /review-workflow.
@@ -54,7 +54,7 @@ jobs:
               skill=review-pr
               ;;
             /review-workflow)
-              skill=review-pr-workflow
+              skill=review-pr-lean
               ;;
             *)
               printf '::error::claude-code-review accepts only /review or /review-workflow; got %s\n' "${cmd:-<empty>}" >&2
@@ -195,10 +195,12 @@ jobs:
             echo "There is no network access and no browser: skip visual verification, and report npm-policy size or maintenance lookups as \"not verifiable in CI\" rather than estimating them."
             echo "Once, via Bash, run: cat .git/config"
             echo "Add one line to the review: gitconfig-mask: sentinel if the origin credential is a placeholder, gitconfig-mask: unreadable if the read failed, gitconfig-mask: visible if a real token is visible. Never paste a token or an authenticated URL."
-            if [[ "$REVIEW_SKILL" == "review-pr-workflow" ]]; then
-              echo "Pass maxVerifyPerLens=2 to the workflow."
-              echo "Use the Workflow tool to run the skill. It returns a task id and runs in the background."
-              echo "Then call TaskOutput on that id with block=true and timeout=600000, repeating until it reports the workflow finished, and assemble the review from its result."
+            if [[ "$REVIEW_SKILL" == "review-pr-lean" ]]; then
+              echo "Phase 0 prep already ran on the runner. Do not run prep. Its summary is in .pr-context/lean/prep.txt; use its suggested tier. If the tier is skip, review in this session with the review-pr skill instead."
+              printf '%s\n' "Launch the Workflow with scriptPath ${GITHUB_WORKSPACE}/.pr-context/lean/run.js and args {\"tier\": \"<tier>\", \"verifyAgent\": \"claude\"}. It returns a task id and runs in the background."
+              echo "No completion notification arrives in CI, so the skill's do-not-poll rule does not apply: call TaskOutput on that id with block=true and timeout=600000, repeating until it reports the workflow finished, and assemble the review from its result."
+              printf '%s\n' "For provenance, pass ${base_sha} as baseRef to node ${HOME}/.claude/skills/review-pr-lean/scripts/review.mjs provenance."
+              echo "Skip the cleanup step."
               echo "Your final reply must contain the assembled review; never end the turn while the workflow is still running."
             else
               echo "Do not start a Workflow. Run the skill in this session and finish here."
@@ -216,7 +218,7 @@ jobs:
           path: .webops-skills
           persist-credentials: false
           sparse-checkout: |
-            skills/review-pr-workflow
+            skills/review-pr-lean
             skills/review-pr
             skills/npm-policy
 
@@ -225,12 +227,29 @@ jobs:
           set -euo pipefail
           mv "$GITHUB_WORKSPACE/.webops-skills" "${RUNNER_TEMP}/webops-skills"
           mkdir -p "$HOME/.claude/skills"
-          for s in review-pr-workflow review-pr npm-policy; do
+          for s in review-pr-lean review-pr npm-policy; do
             src="${RUNNER_TEMP}/webops-skills/skills/$s"
             test -d "$src"
             rm -rf "$HOME/.claude/skills/$s"
             cp -a "$src" "$HOME/.claude/skills/$s"
           done
+
+      # The sandbox has no network and no token, so review-pr-lean's prep
+      # (gh, base fetch) runs here and leaves run.js for the Workflow tool.
+      - name: Prep review-pr-lean
+        if: ${{ env.REVIEW_SKILL == 'review-pr-lean' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          out="$GITHUB_WORKSPACE/.pr-context/lean"
+          mkdir -p "$out"
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=http.https://github.com/.extraheader \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${auth}" \
+            node "$HOME/.claude/skills/review-pr-lean/scripts/review.mjs" prep "$PR_NUMBER" --no-checkout --out "$out" \
+            | tee "$out/prep.txt"
 
       - name: Load Claude OAuth token from Doppler
         id: doppler
