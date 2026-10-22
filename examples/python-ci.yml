@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: yearn/yearn-gha/.github/workflows/python-ci.yml@<approved-sha> # pin to the approved full commit SHA
+    # Defaults match yearn/monitoring .github/workflows/ci.yml:
+    # ruff check, ruff format --check, ty check, uv audit, pytest tests/
