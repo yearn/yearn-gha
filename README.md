@@ -193,7 +193,7 @@ jobs:
 
 | Name | Required | Default | Description |
 | ---- | -------- | ------- | ----------- |
-| `bun-version` | no | `1.3.14` | Bun release installed by `oven-sh/setup-bun`. |
+| `bun-version` | no | `1.4.4` | Bun release installed by `oven-sh/setup-bun`. |
 
 No outputs. No secrets.
 

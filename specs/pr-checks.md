@@ -40,7 +40,7 @@ Two properties define the design:
 
 | Input | Required | Default | Description |
 | ----- | -------- | ------- | ----------- |
-| `bun-version` | no | `'1.3.14'` | Bun release installed by `oven-sh/setup-bun`. Pinned, not `latest`. |
+| `bun-version` | no | `'1.4.4'` | Bun release installed by `oven-sh/setup-bun`. Pinned, not `latest`. |
 
 No outputs. No secrets.
 
