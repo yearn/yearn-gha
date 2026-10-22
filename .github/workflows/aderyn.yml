@@ -1,0 +1,115 @@
+name: Aderyn analysis
+
+on:
+  workflow_call:
+    inputs:
+      fail-on:
+        description: Fail when the report has findings at this level (high or any). Aderyn severities are high/low only.
+        required: false
+        type: string
+        default: high
+      path-excludes:
+        description: >-
+          Comma-delimited path fragments passed to aderyn -x/--path-excludes.
+          Defaults to excluding vendored Foundry libs. Set empty to disable.
+        required: false
+        type: string
+        default: lib
+      root:
+        description: Solidity project root relative to the repo root.
+        required: false
+        type: string
+        default: .
+      aderyn-version:
+        description: Cyfrin/aderyn release tag to download (must match aderyn-sha256).
+        required: false
+        type: string
+        default: aderyn-v0.6.8
+      aderyn-sha256:
+        description: SHA-256 of the linux x86_64 release tarball for aderyn-version.
+        required: false
+        type: string
+        default: ffd6ca658962e211a3ac821c646f69c8e14bf1b1001cbfe091bcd4535a691e46
+      install-foundry:
+        description: Install Foundry before Aderyn (needed so the project can compile).
+        required: false
+        type: boolean
+        default: true
+      foundry-version:
+        description: Foundry toolchain version passed to foundry-rs/foundry-toolchain.
+        required: false
+        type: string
+        default: stable
+      submodules:
+        description: Checkout submodules (false, true, or recursive).
+        required: false
+        type: string
+        default: recursive
+
+jobs:
+  analyze:
+    name: Aderyn analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: ${{ inputs.submodules }}
+          persist-credentials: false
+
+      - name: Install Foundry
+        if: inputs.install-foundry
+        uses: foundry-rs/foundry-toolchain@8b0419c685ef46cb79ec93fbdc131174afceb730 # v1.6.0
+        with:
+          version: ${{ inputs.foundry-version }}
+
+      # Pin the Aderyn CLI by release tag + tarball SHA-256. Cyfrin/aderyn-ci@v0
+      # runs `npm install -g @cyfrin/aderyn@0.6` (floating minor + npm lifecycle
+      # scripts), which this repo's reviews reject for third-party toolchains.
+      - name: Install Aderyn
+        env:
+          ADERYN_VERSION: ${{ inputs.aderyn-version }}
+          ADERYN_SHA256: ${{ inputs.aderyn-sha256 }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "${RUNNER_TEMP}/aderyn.tar.xz" \
+            "https://github.com/Cyfrin/aderyn/releases/download/${ADERYN_VERSION}/aderyn-x86_64-unknown-linux-gnu.tar.xz"
+          echo "${ADERYN_SHA256}  ${RUNNER_TEMP}/aderyn.tar.xz" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/aderyn"
+          tar -xJf "${RUNNER_TEMP}/aderyn.tar.xz" -C "${RUNNER_TEMP}/aderyn" --strip-components=1
+          sudo install -m 755 "${RUNNER_TEMP}/aderyn/aderyn" /usr/local/bin/aderyn
+          aderyn --version
+
+      - name: Run Aderyn
+        env:
+          FAIL_ON: ${{ inputs.fail-on }}
+          PATH_EXCLUDES: ${{ inputs.path-excludes }}
+          ROOT: ${{ inputs.root }}
+        run: |
+          set -euo pipefail
+          case "${FAIL_ON}" in
+            high|any) ;;
+            *)
+              echo "::error::fail-on must be 'high' or 'any'; got ${FAIL_ON}" >&2
+              exit 1
+              ;;
+          esac
+          args=("${ROOT}" -o "${RUNNER_TEMP}/aderyn-report.json" --skip-update-check --no-snippets)
+          if [[ -n "${PATH_EXCLUDES}" ]]; then
+            args+=(-x "${PATH_EXCLUDES}")
+          fi
+          aderyn "${args[@]}"
+          high="$(jq -r '.issue_count.high // 0' "${RUNNER_TEMP}/aderyn-report.json")"
+          low="$(jq -r '.issue_count.low // 0' "${RUNNER_TEMP}/aderyn-report.json")"
+          printf 'aderyn findings: high=%s low=%s\n' "$high" "$low"
+          if [[ "${FAIL_ON}" == "high" && "$high" -gt 0 ]]; then
+            echo "::error::Aderyn found ${high} high-severity issue(s)" >&2
+            exit 1
+          fi
+          if [[ "${FAIL_ON}" == "any" && ( "$high" -gt 0 || "$low" -gt 0 ) ]]; then
+            echo "::error::Aderyn found high=${high} low=${low} issue(s)" >&2
+            exit 1
+          fi
