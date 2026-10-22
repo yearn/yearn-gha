@@ -1,0 +1,27 @@
+# Caller for a worker with no runtime secrets. Every binding
+# yearn/yearn-uptime-kuma-status reads is declared in its wrangler.toml —
+# hostnames, a status-page slug, a cache TTL, and a KV namespace — so there is
+# no <project>/prd to fetch. sync-secrets: false skips the fetch and the
+# `wrangler secret bulk` push, and `project` is omitted.
+#
+# The deploy identity for this repository needs read on
+# webops-shared-prod / cloudflare-deploy-configs only.
+
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+cache-mode: none
+
+jobs:
+  deploy:
+    uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      sync-secrets: false
+      identity-id: ${{ vars.DOPPLER_PRODUCTION_IDENTITY_ID }}
