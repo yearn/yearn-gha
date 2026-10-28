@@ -127,6 +127,37 @@ No outputs.
 - Repo implementation: `yearn/yearn-gha` — `.github/workflows/claude-code-review.yml`
 - Caller examples: `examples/claude-code-review/`
 
+## Review output contract
+
+Both `/review` (`review-pr`) and `/review-workflow` (`review-pr-lean`) are prompted
+to return a summary, issues/findings, a review-method section and an unambiguous
+`APPROVE`, `REQUEST_CHANGES` or `COMMENT` verdict. Validation accepts the Verdict
+section and standalone bold/plain Verdict lines; it does not impose one Markdown
+placement. Quoted or fenced examples are excluded from verdict extraction.
+Code fences close only with the same marker and at least the opening length;
+unclosed fences block publication so the workflow footer cannot become code.
+Required sections can contain subheadings. Multiple verdict values within a
+Verdict section must agree, just like repeated standalone verdict lines.
+Missing/empty required sections, unsupported/conflicting verdicts and a producer's
+own publication-status line (including list or heading formatting) block posting
+and fail the workflow. Failure comments
+contain a controlled reason and run URL, not the rejected report body.
+
+The original validated report is preserved. The workflow appends its own
+publication attribution and run URL; the producer is told to leave posting status
+out. The validator rejects recognized posting-status forms; it is not a semantic
+check of arbitrary prose or the accuracy of the review's findings. The footer appears
+in GitHub only if the comment write succeeds. Existing raw/base64 credential
+checks remain in front of the write. Credential diagnostics are separately
+hardened by the reader-guard change tracked in yearn-metrics #49.
+
+Run `python3 -m unittest discover -s tests -p 'test_review_report.py' -v`. These
+offline fixtures execute the actual posting shell block for both command paths,
+cover both supported verdict formats, malformed/ambiguous output, producer
+publication claims and the final posted body. `tests/review_fixture.py` is shared
+byte-for-byte with the credential-guard PR so both changes can be tested
+independently and combined without duplicate fixture implementations.
+
 ## Credential-read regression checks
 
 Run `python3 -m unittest discover -s tests -p 'test_review_credentials.py' -v`.
