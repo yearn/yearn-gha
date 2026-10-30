@@ -115,7 +115,8 @@ jobs:
           vercel-token: ${{ env.VERCEL_TOKEN }}
           vercel-org-id: ${{ env.VERCEL_ORG_ID }}
           vercel-project-id: ${{ env.VERCEL_PROJECT_ID }}
-          vercel-version: 55.0.0
+          scope: yearn
+          vercel-version: 65.8.0
           # The action keys its PR comment on this name; without it multi-project
           # callers collide on one comment and only the last URL survives.
           vercel-project-name: ${{ inputs.project }}
