@@ -1,0 +1,186 @@
+name: Render deploy
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: Doppler project holding the service's runtime secrets in the prd config (written to the Render env group's .env secret file before the deploy) and RENDER_SERVICE_ID + RENDER_ENV_GROUP_ID in deploy-configs.
+        required: true
+        type: string
+      identity-id:
+        description: Doppler service account identity ID for the production deploy (bound to a push to the default branch).
+        required: true
+        type: string
+    outputs:
+      deploy-id:
+        description: Render deploy ID that went live.
+        value: ${{ jobs.deploy.outputs.deploy-id }}
+
+env:
+  # Shared Doppler project holding RENDER_API_KEY, used by every Render
+  # deploy. The config is separate from the Vercel and Cloudflare deploy
+  # configs so no platform's deploy exports another platform's credential
+  # onto its runner.
+  SHARED_PROJECT: webops-shared-prod
+  DEPLOY_CONFIG: render-deploy-configs
+  APP_DEPLOY_CONFIG: deploy-configs
+  SECRETS_CONFIG: prd
+  # Render mounts env group secret files at the service root; the app loads
+  # this one with dotenv, so the file name is fixed here, not per caller.
+  SECRET_FILE: .env
+  RENDER_API: https://api.render.com/v1
+
+jobs:
+  deploy:
+    name: Deploy to Render
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Serialize per caller repository so two rapid pushes cannot race and
+    # leave production on the older commit. Not cancel-in-progress: Render
+    # keeps building a triggered deploy whether or not this job is alive,
+    # so cancelling only loses the status check.
+    concurrency:
+      group: render-deploy-${{ github.repository }}
+      cancel-in-progress: false
+    cache-mode: none
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      deploy-id: ${{ steps.deploy.outputs.deploy-id }}
+    steps:
+      # Render services have no preview environment here: the only supported
+      # trigger is a push to the caller's default branch. Enforce it so
+      # pull_request, workflow_dispatch, schedule, and non-default-branch
+      # pushes can never reach Doppler or Render.
+      - name: Reject non-default-branch production deploys
+        if: github.event_name != 'push' || github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          printf '::error::deploys are only allowed for a push to the default branch (%s); got %s on %s\n' \
+            "$DEFAULT_BRANCH" "$EVENT_NAME" "$REF" >&2
+          exit 1
+
+      # No checkout and no install: Render clones and builds the commit
+      # itself, so no repository code or dependency runs on this runner.
+      # Every value below is read as a step output, never injected into the
+      # job environment; only the steps that need a value map it explicitly.
+      - name: Load shared Render API key from Doppler
+        id: doppler
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ inputs.identity-id }}
+          doppler-project: ${{ env.SHARED_PROJECT }}
+          doppler-config: ${{ env.DEPLOY_CONFIG }}
+          inject-env-vars: false
+
+      # Render has no per-service token, so the app project only names the
+      # targets: the service to deploy and the env group that holds its
+      # secret file. Both are identifiers, not credentials.
+      - name: Load app Render service and env group IDs from Doppler
+        id: app
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ inputs.identity-id }}
+          doppler-project: ${{ inputs.project }}
+          doppler-config: ${{ env.APP_DEPLOY_CONFIG }}
+          inject-env-vars: false
+
+      - name: Validate Render credentials
+        env:
+          RENDER_API_KEY: ${{ steps.doppler.outputs.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ steps.app.outputs.RENDER_SERVICE_ID }}
+          RENDER_ENV_GROUP_ID: ${{ steps.app.outputs.RENDER_ENV_GROUP_ID }}
+        run: |
+          set -euo pipefail
+          for var in RENDER_API_KEY RENDER_SERVICE_ID RENDER_ENV_GROUP_ID; do
+            if [[ -z "${!var:-}" ]]; then
+              echo "::error::${var} must resolve from its configured Doppler project" >&2
+              exit 1
+            fi
+          done
+          if [[ "$RENDER_SERVICE_ID" != srv-* || "$RENDER_ENV_GROUP_ID" != evg-* ]]; then
+            echo "::error::RENDER_SERVICE_ID must be a srv- id and RENDER_ENV_GROUP_ID an evg- id" >&2
+            exit 1
+          fi
+
+      - name: Load service runtime secrets from Doppler
+        id: secrets
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ inputs.identity-id }}
+          doppler-project: ${{ inputs.project }}
+          doppler-config: ${{ env.SECRETS_CONFIG }}
+          inject-env-vars: false
+
+      # Replaces the env group's secret file with one line per Doppler
+      # secret, single-quoted so dotenv takes the value verbatim (no escape
+      # or variable expansion). A full replace, so a key removed from Doppler
+      # disappears from the file. The write does not redeploy the service:
+      # Render only redeploys env group changes for services with autodeploy
+      # on, and callers turn it off (see specs/doppler-render.md).
+      - name: Write runtime secrets to the Render env group secret file
+        env:
+          RENDER_API_KEY: ${{ steps.doppler.outputs.RENDER_API_KEY }}
+          RENDER_ENV_GROUP_ID: ${{ steps.app.outputs.RENDER_ENV_GROUP_ID }}
+          RUNTIME_SECRETS: ${{ toJSON(steps.secrets.outputs) }}
+          PROJECT: ${{ inputs.project }}
+        run: |
+          set -euo pipefail
+          secrets=$(jq -c 'del(.DOPPLER_PROJECT, .DOPPLER_CONFIG, .DOPPLER_ENVIRONMENT)' <<<"$RUNTIME_SECRETS")
+          if [[ "$(jq 'length' <<<"$secrets")" -eq 0 ]]; then
+            echo "::error::no runtime secrets resolved from Doppler project ${PROJECT} config ${SECRETS_CONFIG}" >&2
+            exit 1
+          fi
+          bad=$(jq -r --arg q "'" '[to_entries[] | select(.value | contains($q)) | .key] | join(", ")' <<<"$secrets")
+          if [[ -n "$bad" ]]; then
+            echo "::error::values containing a single quote cannot be written to ${SECRET_FILE}: ${bad}" >&2
+            exit 1
+          fi
+          jq --arg q "'" '{content: ([to_entries[] | "\(.key)=\($q)\(.value)\($q)"] | sort | join("\n")) + "\n"}' <<<"$secrets" \
+            | curl --fail-with-body -sS -o /dev/null -X PUT \
+                -H "Authorization: Bearer ${RENDER_API_KEY}" \
+                -H 'Content-Type: application/json' \
+                --data-binary @- \
+                "${RENDER_API}/env-groups/${RENDER_ENV_GROUP_ID}/secret-files/${SECRET_FILE}"
+          echo "wrote $(jq 'length' <<<"$secrets") secrets to ${SECRET_FILE}"
+
+      # Deploys the pushed commit, not "latest on the branch", then follows
+      # the deploy to a terminal status so a failed build fails this run.
+      - name: Deploy to Render
+        id: deploy
+        env:
+          RENDER_API_KEY: ${{ steps.doppler.outputs.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ steps.app.outputs.RENDER_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+          auth=(-H "Authorization: Bearer ${RENDER_API_KEY}")
+          response=$(jq -n --arg sha "$GITHUB_SHA" '{commitId: $sha}' \
+            | curl --fail-with-body -sS -X POST "${auth[@]}" \
+                -H 'Content-Type: application/json' \
+                --data-binary @- \
+                "${RENDER_API}/services/${RENDER_SERVICE_ID}/deploys")
+          id=$(jq -r '.id // empty' <<<"$response")
+          if [[ "$id" != dep-* ]]; then
+            echo "::error::Render returned no deploy id; response: ${response}" >&2
+            exit 1
+          fi
+          echo "deploy-id=${id}" >> "$GITHUB_OUTPUT"
+          echo "deploy ${id} created for ${GITHUB_SHA}"
+          while :; do
+            status=$(curl --fail-with-body -sS "${auth[@]}" "${RENDER_API}/services/${RENDER_SERVICE_ID}/deploys/${id}" | jq -r '.status')
+            echo "deploy ${id}: ${status}"
+            case "$status" in
+              live) exit 0 ;;
+              build_failed|update_failed|pre_deploy_failed|canceled|deactivated)
+                echo "::error::deploy ${id} ended with status ${status}" >&2
+                exit 1 ;;
+            esac
+            sleep 15
+          done
