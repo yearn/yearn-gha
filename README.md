@@ -8,9 +8,8 @@ All three workflows share the same skeleton: authenticate to Doppler as a
 service-account identity using the GitHub Actions OIDC token, fetch the
 deploy credentials, and deploy. The Cloudflare workflow also fetches the
 worker's `prd` runtime secrets and pushes them with `wrangler secret bulk`
-before deploy; the Render workflow fetches the service's `prd` and writes
-it to the Render env group's `.env` secret file before triggering the
-deploy. The deploy environment is derived from the
+before deploy; Render runtime secrets come from Doppler's Render sync
+integration, so the Render workflow only triggers the deploy. The deploy environment is derived from the
 triggering event, never passed by the caller. Vercel deploys previews for
 pull requests and production for a `push` to the caller repository's default
 branch; Cloudflare Workers and Render deploy production only. Unsupported
@@ -294,31 +293,24 @@ with Vercel callers).
 
 The workflow fetches `RENDER_API_KEY` as a step output from the
 `render-deploy-configs` config of the shared `webops-shared-prod` project,
-fetches `RENDER_SERVICE_ID` and `RENDER_ENV_GROUP_ID` from `<project>` /
-`deploy-configs`, fetches the service's runtime secrets from `<project>` /
-`prd`, writes them as `KEY='value'` lines to the env group's `.env` secret
-file (`PUT /v1/env-groups/{id}/secret-files/.env`, a full replace), triggers
+fetches `RENDER_SERVICE_ID` from `<project>` / `deploy-configs`, triggers
 a deploy of the pushed commit (`POST /v1/services/{id}/deploys` with
 `commitId`), and polls the deploy until it is `live`. Any other terminal
 status fails the run.
 
 There is no checkout and no install: Render clones and builds the commit, so
 no repository code or dependency runs on the runner. The only code holding
-the key or the secrets is the pinned fetch action, `jq` and `curl`.
+the key is the pinned fetch action, `jq` and `curl`.
 
 Production only. The only supported trigger is a push to the caller
 repository's default branch; everything else is rejected before Doppler
 authentication. The caller's Render service must have `autoDeploy: false`
 (in `render.yaml`): with autodeploy on, Render would deploy the push a second
-time by itself and would also redeploy on the env group write.
+time by itself.
 
-A value containing a single quote cannot be written in the `KEY='value'`
-form; the workflow names the offending keys and fails before any Render
-call. A `prd` config that resolves empty also fails the deploy — that check
-is what catches a wrong `project`. See `specs/doppler-render.md` for the
-full risk discussion and the rejected alternatives (including Doppler's
-managed Render sync, which targets service env vars, not env groups, and
-does not redeploy).
+Runtime secrets are not handled here: Doppler's Render sync integration
+pushes `<project>` / `prd` to the service's env vars. A sync change takes
+effect on the next deploy. See `specs/doppler-render.md`.
 
 ### Usage
 
@@ -358,8 +350,8 @@ repository can call both `vercel-deploy.yml` and `render-deploy.yml`
 
 | Name          | Required | Default | Description                                                          |
 | ------------- | -------- | ------- | -------------------------------------------------------------------- |
-| `project`     | yes      | —       | Doppler project holding the service's runtime secrets in `prd` and `RENDER_SERVICE_ID` + `RENDER_ENV_GROUP_ID` in `deploy-configs`. Every value in `prd` is written to the env group's `.env`. |
-| `identity-id` | yes      | —       | Production Doppler service-account identity; loads the shared `render-deploy-configs`, `<project>` / `deploy-configs` and `<project>` / `prd`. |
+| `project`     | yes      | —       | Doppler project holding `RENDER_SERVICE_ID` in `deploy-configs`. |
+| `identity-id` | yes      | —       | Production Doppler service-account identity; loads the shared `render-deploy-configs` and `<project>` / `deploy-configs`. |
 
 ### Outputs
 
@@ -373,18 +365,15 @@ repository can call both `vercel-deploy.yml` and `render-deploy.yml`
    `RENDER_API_KEY` (visibility Masked). Create the key from a dedicated
    Render deploy user whose only workspace is the fleet's. Keep ONLY that
    value there — every value in the config is fetched onto the runner.
-2. Create one project per Render service with two configs: `prd` (runtime
-   secrets, Masked; every value is written to the env group file) and
-   `deploy-configs` (`RENDER_SERVICE_ID`, `RENDER_ENV_GROUP_ID`). Seed `prd`
-   from the live env group `.env` and diff keys and values before the first
-   run: the write is a full replace, so a key missing from Doppler is
-   removed from Render.
+2. Create one project per Render service with `deploy-configs`
+   (`RENDER_SERVICE_ID`) and `prd` (runtime secrets). Connect `prd` to the
+   service with Doppler's Render sync integration.
 3. Create one production identity per repository, as in the Cloudflare
    production setup: subject `repo:<org>/<repo>:ref:refs/heads/<default>`,
    claims `event_name: push`, `ref: refs/heads/<default>`, and
    `job_workflow_ref: yearn/yearn-gha/.github/workflows/render-deploy.yml@<approved-sha>`,
-   with read access to `webops-shared-prod` / `render-deploy-configs`,
-   `<project>` / `deploy-configs` and `<project>` / `prd`.
+   with read access to `webops-shared-prod` / `render-deploy-configs` and
+   `<project>` / `deploy-configs`.
 4. Pass the identity ID as `identity-id` and the Doppler project as
    `project` in the caller. After the first green run, set
    `autoDeploy: false` on the service in `render.yaml`.
