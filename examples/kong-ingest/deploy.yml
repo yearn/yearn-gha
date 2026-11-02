@@ -1,0 +1,20 @@
+name: Deploy ingest to Render
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+cache-mode: none
+
+jobs:
+  ingest:
+    uses: yearn/yearn-gha/.github/workflows/render-deploy.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      project: kong-ingest
+      # Own variable, not DOPPLER_PRODUCTION_IDENTITY_ID: kong also calls
+      # vercel-deploy.yml, whose identity is bound to that workflow's SHA.
+      identity-id: ${{ vars.DOPPLER_RENDER_IDENTITY_ID }}

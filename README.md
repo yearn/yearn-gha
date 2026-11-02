@@ -1,23 +1,26 @@
 # Deploy workflows
 
-Reusable GitHub workflows for deploying to Vercel and Cloudflare Workers with
-credentials resolved from Doppler via OIDC. No static secrets live in GitHub.
+Reusable GitHub workflows for deploying to Vercel, Cloudflare Workers and
+Render with credentials resolved from Doppler via OIDC. No static secrets
+live in GitHub.
 
-Both workflows share the same skeleton: authenticate to Doppler as a
+All three workflows share the same skeleton: authenticate to Doppler as a
 service-account identity using the GitHub Actions OIDC token, fetch the
 deploy credentials, and deploy. The Cloudflare workflow also fetches the
 worker's `prd` runtime secrets and pushes them with `wrangler secret bulk`
-before deploy. The deploy environment is derived from the
+before deploy; Render runtime secrets come from Doppler's Render sync
+integration, so the Render workflow only triggers the deploy. The deploy environment is derived from the
 triggering event, never passed by the caller. Vercel deploys previews for
 pull requests and production for a `push` to the caller repository's default
-branch; Cloudflare Workers deploys production only. Unsupported events
-(`workflow_dispatch`, `schedule`, non-default-branch pushes, fork pull
+branch; Cloudflare Workers and Render deploy production only. Unsupported
+events (`workflow_dispatch`, `schedule`, non-default-branch pushes, fork pull
 requests) are rejected before credentials are loaded.
 
 | Workflow | Guide |
 | -------- | ----- |
 | `.github/workflows/vercel-deploy.yml` | `specs/doppler-vercel.md` |
 | `.github/workflows/cloudflare-deploy.yml` | `specs/doppler-cloudflare.md` |
+| `.github/workflows/render-deploy.yml` | `specs/doppler-render.md` |
 
 ## Vercel deploy
 
@@ -286,6 +289,95 @@ with Vercel callers).
    `project` in the caller, or `sync-secrets: false` and no `project` for a
    worker with no runtime secrets.
 
+## Render deploy
+
+The workflow fetches `RENDER_API_KEY` as a step output from the
+`render-deploy-configs` config of the shared `webops-shared-prod` project,
+fetches `RENDER_SERVICE_ID` from `<project>` / `deploy-configs`, triggers
+a deploy of the pushed commit (`POST /v1/services/{id}/deploys` with
+`commitId`), and polls the deploy until it is `live`. Any other terminal
+status fails the run.
+
+There is no checkout and no install: Render clones and builds the commit, so
+no repository code or dependency runs on the runner. The only code holding
+the key is the pinned fetch action, `jq` and `curl`.
+
+Production only. The only supported trigger is a push to the caller
+repository's default branch; everything else is rejected before Doppler
+authentication. The caller's Render service must have `autoDeploy: false`
+(in `render.yaml`): with autodeploy on, Render would deploy the push a second
+time by itself.
+
+Runtime secrets are not handled here: Doppler's Render sync integration
+pushes `<project>` / `prd` to the service's env vars. A sync change takes
+effect on the next deploy. See `specs/doppler-render.md`.
+
+### Usage
+
+```yaml
+name: Deploy ingest to Render
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+cache-mode: none
+
+jobs:
+  ingest:
+    uses: yearn/yearn-gha/.github/workflows/render-deploy.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      project: kong-ingest
+      identity-id: ${{ vars.DOPPLER_RENDER_IDENTITY_ID }}
+```
+
+Deploys are serialized by the reusable workflow itself (one job-level
+concurrency group per caller repository, without cancellation), so callers
+need no concurrency block.
+
+Callers grant only `contents: read` and `id-token: write`. Configure
+`DOPPLER_RENDER_IDENTITY_ID` as an Actions repository variable in each
+caller. The name differs from the Vercel/Cloudflare variable on purpose: a
+repository can call both `vercel-deploy.yml` and `render-deploy.yml`
+(`yearn/kong` does), and each identity is bound to its own
+`job_workflow_ref`.
+
+### Inputs
+
+| Name          | Required | Default | Description                                                          |
+| ------------- | -------- | ------- | -------------------------------------------------------------------- |
+| `project`     | yes      | —       | Doppler project holding `RENDER_SERVICE_ID` in `deploy-configs`. |
+| `identity-id` | yes      | —       | Production Doppler service-account identity; loads the shared `render-deploy-configs` and `<project>` / `deploy-configs`. |
+
+### Outputs
+
+| Name        | Description                          |
+| ----------- | ------------------------------------ |
+| `deploy-id` | Render deploy ID that went live.     |
+
+### Doppler setup
+
+1. In `webops-shared-prod`, create the `render-deploy-configs` config with
+   `RENDER_API_KEY` (visibility Masked). Create the key from a dedicated
+   Render deploy user whose only workspace is the fleet's. Keep ONLY that
+   value there — every value in the config is fetched onto the runner.
+2. Create one project per Render service with `deploy-configs`
+   (`RENDER_SERVICE_ID`) and `prd` (runtime secrets). Connect `prd` to the
+   service with Doppler's Render sync integration.
+3. Create one production identity per repository, as in the Cloudflare
+   production setup: subject `repo:<org>/<repo>:ref:refs/heads/<default>`,
+   claims `event_name: push`, `ref: refs/heads/<default>`, and
+   `job_workflow_ref: yearn/yearn-gha/.github/workflows/render-deploy.yml@<approved-sha>`,
+   with read access to `webops-shared-prod` / `render-deploy-configs` and
+   `<project>` / `deploy-configs`.
+4. Pass the identity ID as `identity-id` and the Doppler project as
+   `project` in the caller. After the first green run, set
+   `autoDeploy: false` on the service in `render.yaml`.
+
 # Claude code review
 
 Reusable GitHub workflow (`.github/workflows/claude-code-review.yml`) that runs
@@ -393,8 +485,9 @@ and SHA pin. The reusable workflow checks the event, the `/review` or
 and fails closed.
 
 See `examples/` for the current Katana APR, yvUSD APR, fapy-hook (Vercel),
-rpc-read-proxy (Cloudflare Workers) and claude-code-review shapes.
-See `specs/doppler-vercel.md`, `specs/doppler-cloudflare.md` and
+rpc-read-proxy (Cloudflare Workers), kong-ingest (Render) and
+claude-code-review shapes. See `specs/doppler-vercel.md`,
+`specs/doppler-cloudflare.md`, `specs/doppler-render.md` and
 `specs/claude-code-review.md` for the full operating guides.
 
 # PR checks
