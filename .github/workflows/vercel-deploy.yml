@@ -23,6 +23,9 @@ on:
       deployment-url:
         description: Preview or production URL returned by Vercel.
         value: ${{ jobs.deploy.outputs.deployment-url }}
+      pr-alias-url:
+        description: Stable per-PR preview URL that always points at the PR's latest deploy. Empty outside pull requests.
+        value: ${{ jobs.deploy.outputs.pr-alias-url }}
 
 env:
   # Shared Doppler project holding VERCEL_TOKEN and VERCEL_ORG_ID in the
@@ -33,6 +36,9 @@ env:
   # Pull requests deploy previews; any other trigger (push to the default
   # branch) deploys production.
   DEPLOY_ENV: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
+  # Stable alias reassigned on every PR deploy. Project name keeps callers in the
+  # shared team from colliding on one *.vercel.app name.
+  PR_ALIAS: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}.vercel.app', inputs.project, github.event.pull_request.number) || '' }}
 
 jobs:
   deploy:
@@ -46,6 +52,7 @@ jobs:
       pull-requests: write
     outputs:
       deployment-url: ${{ steps.deploy.outputs.preview-url }}
+      pr-alias-url: ${{ env.PR_ALIAS && format('https://{0}', env.PR_ALIAS) || '' }}
     steps:
       # Fork PRs never receive an OIDC token; fail explicitly instead of
       # letting the Doppler login error obscure the cause.
@@ -126,4 +133,5 @@ jobs:
           github-token: ${{ github.token }}
           github-comment: true
           github-deployment: true
+          alias-domains: ${{ env.PR_ALIAS }}
           github-deployment-environment: ${{ env.DEPLOY_ENV == 'production' && (inputs.production-deployment-name || 'production') || (inputs.preview-deployment-name || 'preview') }}

@@ -91,9 +91,10 @@ production.
 
 ### Outputs
 
-| Name             | Description                                    |
-| ---------------- | ---------------------------------------------- |
-| `deployment-url` | Preview or production URL returned by Vercel.  |
+| Name             | Description                                                                                          |
+| ---------------- | ---------------------------------------------------------------------------------------------------- |
+| `deployment-url` | Preview or production URL returned by Vercel (changes every commit).                                 |
+| `pr-alias-url`   | Stable `https://<project>-pr-<number>.vercel.app` alias pointing at the PR's latest deploy. Empty outside PRs. |
 
 Consume it from a downstream job with
 `${{ needs.deploy.outputs.deployment-url }}`.
