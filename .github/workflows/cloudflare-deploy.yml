@@ -7,8 +7,8 @@ on:
         description: >-
           Doppler project holding the worker's config: prd for a push to the
           default branch, preview for a pull request. Its values are pushed to
-          Cloudflare with wrangler secret bulk before the deploy and, with
-          build-command, exported as the build environment. Required when
+          Cloudflare with wrangler secret bulk before the deploy and, when the
+          app has a build, exported as the build environment. Required when
           sync-secrets is true, and for every pull request, where it also
           names the preview worker (<project>-pr-<number>).
         required: false
@@ -19,16 +19,18 @@ on:
           Whether the worker has runtime secrets to push from the Doppler
           config. Set false for a worker whose every binding is declared in
           its wrangler config, or for a static site; nothing is then pushed to
-          Cloudflare, and without build-command the config is never fetched,
+          Cloudflare, and without a build the config is never fetched,
           so no application secret reaches the runner at all.
         required: false
         default: true
         type: boolean
       build-command:
         description: >-
-          Command that builds the app before the deploy (e.g. bun run build),
-          run in working-directory with the Doppler config as its environment.
-          Leave empty for a worker that wrangler bundles by itself.
+          Fallback build command (e.g. bun run build) for an app whose
+          package.json has no build:cloudflare script. When that script exists
+          it is the build (bun run build:cloudflare) and this input is ignored.
+          Either runs in working-directory with the Doppler config as its
+          environment. Leave empty for a worker that wrangler bundles by itself.
         required: false
         default: ""
         type: string
@@ -131,6 +133,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # The app's own build:cloudflare script is the build; the build-command
+      # input is the fallback for a repository without one.
+      - name: Detect build script
+        id: build-script
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [[ -f package.json ]] && jq -e '.scripts["build:cloudflare"]' package.json >/dev/null; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # Unlike Vercel there is no remote build: the app is built and bundled
       # on the runner, so project dependencies must be installed. The fleet
       # standardizes on bun, so the caller repository must ship a bun
@@ -148,7 +160,7 @@ jobs:
       # Builds run through the app's own scripts, which call node. Pin it
       # rather than inherit whatever the runner image ships.
       - name: Set up Node
-        if: inputs.build-command != ''
+        if: steps.build-script.outputs.found == 'true' || inputs.build-command != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
@@ -203,11 +215,11 @@ jobs:
       # The app's Doppler config (prd or preview) is read as step outputs,
       # never injected into the job environment. It feeds two steps through
       # explicit env mapping: the build, and the secrets push. A caller with
-      # sync-secrets: false and no build-command skips the fetch, so no
+      # sync-secrets: false and no build skips the fetch, so no
       # application secret is fetched at all (see specs/doppler-cloudflare.md).
       - name: Load app config from Doppler
         id: app-config
-        if: inputs.project != '' && (inputs.sync-secrets || inputs.build-command != '')
+        if: inputs.project != '' && (inputs.sync-secrets || steps.build-script.outputs.found == 'true' || inputs.build-command != '')
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
         with:
           auth-method: oidc
@@ -222,20 +234,24 @@ jobs:
       # hand them to every later step, wrangler-action included. The Cloudflare
       # token has not been fetched yet.
       - name: Build
-        if: inputs.build-command != ''
+        if: steps.build-script.outputs.found == 'true' || inputs.build-command != ''
         working-directory: ${{ inputs.working-directory }}
         env:
           YEARN_GHA_APP_CONFIG: ${{ toJSON(steps.app-config.outputs) }}
           YEARN_GHA_BUILD_COMMAND: ${{ inputs.build-command }}
+          YEARN_GHA_BUILD_SCRIPT: ${{ steps.build-script.outputs.found }}
         run: |
           set -euo pipefail
           command=$YEARN_GHA_BUILD_COMMAND
+          if [[ "$YEARN_GHA_BUILD_SCRIPT" == true ]]; then
+            command='bun run build:cloudflare'
+          fi
           exports=$(jq -r '(. // {})
             | del(.DOPPLER_PROJECT, .DOPPLER_CONFIG, .DOPPLER_ENVIRONMENT)
             | to_entries[]
             | select(.key | test("^[A-Za-z_][A-Za-z0-9_]*$"))
             | "export \(.key)=\(.value | @sh)"' <<<"$YEARN_GHA_APP_CONFIG")
-          unset YEARN_GHA_APP_CONFIG YEARN_GHA_BUILD_COMMAND
+          unset YEARN_GHA_APP_CONFIG YEARN_GHA_BUILD_COMMAND YEARN_GHA_BUILD_SCRIPT
           eval "$exports"
           bash -euo pipefail -c "$command"
 

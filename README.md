@@ -170,8 +170,8 @@ Do the same steps for the preview environment if needed.
 
 The workflow installs dependencies with bun (`--frozen-lockfile`, pinned in
 `.github/workflows/cloudflare-deploy.yml`), fetches the app's Doppler config
-from `<project>` (`prd` or `preview`), runs `build-command` when one is
-given, fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as step
+from `<project>` (`prd` or `preview`), runs the app's build when it has
+one, fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as step
 outputs from the shared `webops-shared-prod` project, pushes the runtime
 secrets with `wrangler secret bulk`, and runs `wrangler deploy`. No
 `wranglerVersion` is passed, so wrangler-action uses the wrangler the app
@@ -229,7 +229,10 @@ included, in the account that serves production. The workflow does not
 check for it.
 
 Unlike Vercel there is no remote build: the app is built and bundled on the
-runner. `build-command` runs in `working-directory` with the Doppler config
+runner. The build is the `build:cloudflare` script in the app's
+`package.json`, run as `bun run build:cloudflare`; an app without that
+script falls back to the `build-command` input. Either runs in
+`working-directory` with the Doppler config
 exported as its environment, which is how `NEXT_PUBLIC_*` and `VITE_*`
 values reach a frontend build. The values are exported inside that one step,
 not through `GITHUB_ENV`, and the Cloudflare token is fetched after it.
@@ -248,7 +251,7 @@ config — sets `sync-secrets: false` and omits `project`. Both the config
 fetch and the push step are skipped, so no application secret reaches the
 runner, and the deploy identity needs read on `cloudflare-deploy-configs`
 only (see `examples/uptime-kuma-status/deploy.yml`). A static site sets
-`sync-secrets: false`, keeps `project` and sets `build-command`: the config
+`sync-secrets: false`, keeps `project` and has a build: the config
 is fetched for the build and nothing is pushed (see
 `examples/cloudflare-site/deploy.yml`). With `sync-secrets` left at its
 `true` default, a config that resolves empty still fails the deploy — that
@@ -312,8 +315,8 @@ no identity would match.
 | Name          | Required | Default | Description                                                          |
 | ------------- | -------- | ------- | -------------------------------------------------------------------- |
 | `project`     | when `sync-secrets` is true, and for every pull request | — | Doppler project holding the app's config in `prd` and `preview`. Also names the preview worker `<project>-pr-<number>`. |
-| `sync-secrets` | no      | `true`  | Whether the worker has runtime secrets to push. `false` skips the push step; without `build-command` it also skips the config fetch. |
-| `build-command` | no     | —       | Command that builds the app before the deploy (e.g. `bun run build`), run in `working-directory` with the Doppler config as its environment. |
+| `sync-secrets` | no      | `true`  | Whether the worker has runtime secrets to push. `false` skips the push step; without a build it also skips the config fetch. |
+| `build-command` | no     | —       | Fallback build command (e.g. `bun run build`) for an app whose `package.json` has no `build:cloudflare` script; ignored when the script exists. Runs in `working-directory` with the Doppler config as its environment. |
 | `working-directory` | no | `.`     | Directory holding the wrangler config, relative to the repository root. |
 | `identity-id` | yes      | —       | Doppler service-account identity for the event: preview for a pull request, production for a push to the default branch. |
 
@@ -333,7 +336,7 @@ no identity would match.
    the config is fetched onto the runner as a step output.
 2. Keep each app's config in `<project>` / `prd` and `<project>` / `preview`
    (visibility Masked). With `sync-secrets` every value there is pushed to
-   the worker; with `build-command` every value is the build's environment.
+   the worker; with a build every value is the build's environment.
    A worker with no runtime secrets and no build skips this step: its caller
    sets `sync-secrets: false`. Do not create an empty `prd` config for it.
 3. Use one service account per repository with two identities — the
