@@ -1,0 +1,128 @@
+name: Python CI
+
+on:
+  workflow_call:
+    inputs:
+      sync-args:
+        description: Extra arguments for `uv sync` after --locked (lint/test jobs).
+        required: false
+        type: string
+        default: "--extra dev"
+      test-command:
+        description: Test command for the test job.
+        required: false
+        type: string
+        default: uv run pytest tests/
+      run-lint:
+        description: Run ruff check, ruff format --check, and ty check.
+        required: false
+        type: boolean
+        default: true
+      run-tests:
+        description: Run the test job.
+        required: false
+        type: boolean
+        default: true
+      run-audit:
+        description: Run uv audit.
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  # Job layout matches yearn/monitoring .github/workflows/ci.yml (test / lint / audit).
+  test:
+    name: Test
+    if: inputs.run-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        env:
+          SYNC_ARGS: ${{ inputs.sync-args }}
+        run: |
+          set -euo pipefail
+          uv sync --locked ${SYNC_ARGS}
+
+      - name: Run tests
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          set -euo pipefail
+          bash -lc "$TEST_COMMAND"
+
+  lint:
+    name: Lint
+    if: inputs.run-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        env:
+          SYNC_ARGS: ${{ inputs.sync-args }}
+        run: |
+          set -euo pipefail
+          uv sync --locked ${SYNC_ARGS}
+
+      - name: Check code with ruff
+        run: uv run ruff check .
+
+      - name: Check formatting with ruff
+        run: uv run ruff format --check .
+
+      - name: Check types with ty
+        run: uv run ty check
+
+  audit:
+    name: Audit
+    if: inputs.run-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Audit dependencies for known vulnerabilities
+        run: uv audit --preview-features audit-command
