@@ -1,0 +1,40 @@
+# Caller for a monorepo that deploys several workers from one repository.
+#
+# One matrix entry per app: `project` is its Doppler project, `dir` the
+# directory holding its wrangler config. The bun lockfile is looked up in that
+# directory first, then at the repository root (a workspace).
+#
+# The reusable workflow serializes per worker, so the entries deploy in
+# parallel and a second push does not cancel another app's queued deploy.
+
+name: Deploy to Cloudflare Workers
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+cache-mode: none
+
+jobs:
+  deploy:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: ylockers-ui-yb
+            dir: packages/yb
+          - project: ylockers-yprisma
+            dir: packages/prisma
+    uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      project: ${{ matrix.project }}
+      working-directory: ${{ matrix.dir }}
+      build-command: bun run build
+      identity-id: ${{ github.event_name == 'pull_request' && vars.DOPPLER_CF_PREVIEW_IDENTITY_ID || vars.DOPPLER_CF_PRODUCTION_IDENTITY_ID }}

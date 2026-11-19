@@ -1,0 +1,35 @@
+# Caller for a static site (assets only) with pull request previews.
+#
+# The site has no runtime: every value it uses is inlined by the build, so
+# sync-secrets is false and nothing is pushed to Cloudflare. `project` stays,
+# because the build reads its environment from <project>/prd (push) or
+# <project>/preview (pull request), and because it names the preview worker
+# <project>-pr-<number>.
+#
+# The repository's wrangler config must define a `preview` environment with
+# workers_dev: true and routes: [] (see README.md).
+
+name: Deploy to Cloudflare Workers
+
+on:
+  # `closed` is what deletes the preview worker.
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+cache-mode: none
+
+jobs:
+  deploy:
+    uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      project: apr-oracle
+      sync-secrets: false
+      build-command: bun run build
+      identity-id: ${{ github.event_name == 'pull_request' && vars.DOPPLER_CF_PREVIEW_IDENTITY_ID || vars.DOPPLER_CF_PRODUCTION_IDENTITY_ID }}
