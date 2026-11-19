@@ -1,0 +1,23 @@
+name: Vyper CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vyper-ci-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    uses: yearn/yearn-gha/.github/workflows/vyper-ci.yml@<approved-sha> # pin to the approved full commit SHA
+    with:
+      # Match yearn/yearn-vesting-escrow: vyper is pinned in the caller lockfile;
+      # this command is the project's compile entrypoint.
+      compile-command: uv run --locked vesting-escrow-compile
+      test-command: uv run --locked pytest
+      run-tests: true
