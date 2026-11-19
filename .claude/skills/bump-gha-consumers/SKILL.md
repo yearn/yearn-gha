@@ -18,7 +18,7 @@ Run `bump.sh` from this skill dir.
 
 Steps the script does:
 1. `gh search code` for `yearn/yearn-gha/.github/workflows` in org `yearn`.
-2. Per repo: shallow clone default branch, `sed` every `yearn/yearn-gha/.github/workflows/*.yml@<ref>` to the new SHA.
+2. Per repo: shallow clone default branch, `sed` every `yearn/yearn-gha/.github/workflows/*.yml@<ref>` to the new SHA. A `cloudflare-deploy.yml` caller without `pull-requests: write` gets it added next to `id-token: write`.
 3. Skip repo if no change.
 4. Branch `chore/bump-yearn-gha-<short>`, commit, push, `gh pr create`.
 5. `gh pr merge --squash --admin --delete-branch` (bypasses branch protection; needs admin).

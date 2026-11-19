@@ -7,12 +7,13 @@ live in GitHub.
 All three workflows share the same skeleton: authenticate to Doppler as a
 service-account identity using the GitHub Actions OIDC token, fetch the
 deploy credentials, and deploy. The Cloudflare workflow also fetches the
-worker's `prd` runtime secrets and pushes them with `wrangler secret bulk`
-before deploy; Render runtime secrets come from Doppler's Render sync
-integration, so the Render workflow only triggers the deploy. The deploy environment is derived from the
-triggering event, never passed by the caller. Vercel deploys previews for
-pull requests and production for a `push` to the caller repository's default
-branch; Cloudflare Workers and Render deploy production only. Unsupported
+app's Doppler config, builds the app when asked to, and pushes the runtime
+secrets with `wrangler secret bulk` before deploy; Render runtime secrets
+come from Doppler's Render sync integration, so the Render workflow only
+triggers the deploy. The deploy environment is derived from the triggering
+event, never passed by the caller. Vercel and Cloudflare Workers deploy
+previews for pull requests and production for a `push` to the caller
+repository's default branch; Render deploys production only. Unsupported
 events (`workflow_dispatch`, `schedule`, non-default-branch pushes, fork pull
 requests) are rejected before credentials are loaded.
 
@@ -168,39 +169,71 @@ Do the same steps for the preview environment if needed.
 ## Cloudflare Workers deploy
 
 The workflow installs dependencies with bun (`--frozen-lockfile`, pinned in
-`.github/workflows/cloudflare-deploy.yml`), fetches `CLOUDFLARE_API_TOKEN`
-and `CLOUDFLARE_ACCOUNT_ID` as step outputs from the
-`cloudflare-deploy-configs` config of the shared `webops-shared-prod`
-project, fetches the worker's runtime secrets from `<project>` / `prd`,
-pushes them with `wrangler secret bulk`, and runs `wrangler deploy`. No
+`.github/workflows/cloudflare-deploy.yml`), fetches the app's Doppler config
+from `<project>` (`prd` or `preview`), runs `build-command` when one is
+given, fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as step
+outputs from the shared `webops-shared-prod` project, pushes the runtime
+secrets with `wrangler secret bulk`, and runs `wrangler deploy`. No
 `wranglerVersion` is passed, so wrangler-action uses the wrangler the app
 repository installed — pin wrangler in the app's devDependencies and
 lockfile. There is no per-app Doppler deploy config: the worker's identity
-is its name in the app repository's `wrangler.toml`, so `project` only
-names where the runtime secrets live.
+is its name in the app repository's wrangler config, so `project` only
+names where the app's config lives.
 
-Callers must ship a bun lockfile and a wrangler devDependency. A missing
-lockfile fails an explicit `bun.lock`/`bun.lockb` check before the install —
-`--frozen-lockfile` only rejects a lockfile that *would change*, so with none
-present bun would resolve wrangler fresh from the registry; a stale lockfile
-fails the frozen install itself; and a lockfile without a runnable wrangler
-fails a `bun run wrangler --version` probe — the exact command
-wrangler-action runs for a bun caller to decide whether to install its own —
-which must exit 0 and print a parseable wrangler version. All three run
-before Doppler is reached, so wrangler-action never installs an unpinned
-wrangler in the step that holds the token. The
-workflow is deploy-only — run smoke tests in a `needs: deploy` job in the
-caller (see `examples/rpc-read-proxy/deploy.yml`).
+Callers must ship a bun lockfile and a wrangler devDependency. The lockfile
+is looked up in `working-directory` first, then at the repository root, and
+the install runs where it is found. A missing lockfile fails an explicit
+`bun.lock`/`bun.lockb` check before the install — `--frozen-lockfile` only
+rejects a lockfile that *would change*, so with none present bun would
+resolve wrangler fresh from the registry; a stale lockfile fails the frozen
+install itself; and a lockfile without a runnable wrangler fails a
+`bun run wrangler --version` probe — the exact command wrangler-action runs
+for a bun caller to decide whether to install its own — which must exit 0
+and print a parseable wrangler version. All three run before Doppler is
+reached, so wrangler-action never installs an unpinned wrangler in the step
+that holds the token. The workflow is deploy-only — run smoke tests in a
+`needs: deploy` job in the caller (see `examples/rpc-read-proxy/deploy.yml`).
 
-Production only — the workers fleet has no preview environment. The only
-supported trigger is a push to the caller repository's default branch;
-`pull_request`, `workflow_dispatch`, `schedule`, and non-default-branch
-pushes are rejected before Doppler authentication.
+Pull requests deploy previews; a push to the caller repository's default
+branch deploys production. Fork pull requests, `workflow_dispatch`,
+`schedule`, and non-default-branch pushes are rejected before Doppler
+authentication.
 
-Unlike Vercel there is no remote build: wrangler bundles the worker on the
-runner. Worker runtime secrets pass through the runner: before
-`wrangler deploy` the workflow fetches `<project>` / `prd` as step outputs,
-drops the Doppler meta keys (`DOPPLER_PROJECT`, `DOPPLER_CONFIG`,
+A preview is its own worker, `<project>-pr-<number>`, deployed with
+`wrangler deploy --env preview --name <project>-pr-<number>` and redeployed
+on every push to the pull request. Previews go to a separate Cloudflare
+account with its own token (`cloudflare-preview-deploy-configs`): pull
+request code runs on the runner, so the credentials a pull request can reach
+must not be able to touch production workers or zones. A `comment` job posts
+the preview URL on the pull request, and closing the pull request deletes
+the worker. The app's wrangler config must define a `preview` environment
+that is safe outside production:
+
+```jsonc
+{
+  "name": "my-site",
+  "compatibility_date": "2026-08-04",
+  "assets": { "directory": "./dist", "not_found_handling": "single-page-application" },
+  "workers_dev": false,
+  "routes": [{ "pattern": "my-site.yearn.fi/*", "zone_name": "yearn.fi" }],
+  "env": {
+    "preview": { "workers_dev": true, "routes": [], "triggers": { "crons": [] } }
+  }
+}
+```
+
+Bindings in the `preview` environment must point at resources in the preview
+account. wrangler only warns when the environment is missing and deploys the
+top-level config instead, so the workflow cannot catch a config without one.
+
+Unlike Vercel there is no remote build: the app is built and bundled on the
+runner. `build-command` runs in `working-directory` with the Doppler config
+exported as its environment, which is how `NEXT_PUBLIC_*` and `VITE_*`
+values reach a frontend build. The values are exported inside that one step,
+not through `GITHUB_ENV`, and the Cloudflare token is fetched after it.
+Worker runtime secrets pass through the runner as well: before
+`wrangler deploy` the workflow takes the config as step outputs, drops the
+Doppler meta keys (`DOPPLER_PROJECT`, `DOPPLER_CONFIG`,
 `DOPPLER_ENVIRONMENT`), fails if no secret remains, and pipes the rest to
 `bun run wrangler secret bulk` — Doppler's DIY Workers flow, with the OIDC
 identity instead of a service token. On a first deploy wrangler creates a
@@ -208,16 +241,18 @@ draft worker. The sync is additive: a key removed from Doppler stays on the
 worker until deleted by hand. See `specs/doppler-cloudflare.md` for the full
 risk discussion.
 
-A worker with no runtime secrets — every binding declared in its
-`wrangler.toml` — sets `sync-secrets: false` and omits `project`. Both the
-`<project>` / `prd` fetch and the push step are skipped, so no application
-secret reaches the runner, and the deploy identity needs read on
-`cloudflare-deploy-configs` only (see
-`examples/uptime-kuma-status/deploy.yml`). With `sync-secrets` left at its
-`true` default, a `prd` config that resolves empty still fails the deploy —
-that check is what catches a wrong `project`.
+A worker with no runtime secrets — every binding declared in its wrangler
+config — sets `sync-secrets: false` and omits `project`. Both the config
+fetch and the push step are skipped, so no application secret reaches the
+runner, and the deploy identity needs read on `cloudflare-deploy-configs`
+only (see `examples/uptime-kuma-status/deploy.yml`). A static site sets
+`sync-secrets: false`, keeps `project` and sets `build-command`: the config
+is fetched for the build and nothing is pushed (see
+`examples/cloudflare-site/deploy.yml`). With `sync-secrets` left at its
+`true` default, a config that resolves empty still fails the deploy — that
+check is what catches a wrong `project`.
 
-The Cloudflare config is deliberately separate from the Vercel
+The Cloudflare configs are deliberately separate from the Vercel
 `deploy-configs` so neither platform's deploy exports the other's
 credentials onto its runner.
 
@@ -227,12 +262,15 @@ credentials onto its runner.
 name: Deploy to Cloudflare Workers
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
   push:
     branches: [main]
 
 permissions:
   contents: read
   id-token: write
+  pull-requests: write
 
 cache-mode: none
 
@@ -241,54 +279,79 @@ jobs:
     uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # pin to the approved full commit SHA
     with:
       project: my-worker
-      identity-id: ${{ vars.DOPPLER_PRODUCTION_IDENTITY_ID }}
+      identity-id: ${{ github.event_name == 'pull_request' && vars.DOPPLER_CF_PREVIEW_IDENTITY_ID || vars.DOPPLER_CF_PRODUCTION_IDENTITY_ID }}
 ```
 
-Deploys are serialized by the reusable workflow itself (one job-level
-concurrency group per caller repository, without cancellation), so callers
-need no concurrency block.
+The `closed` type is what deletes the preview worker; without it previews
+accumulate in the preview account. A production-only caller drops the
+`pull_request` trigger and passes its production identity. A monorepo runs
+one job per app with a matrix over `project` and `working-directory` (see
+`examples/cloudflare-monorepo/deploy.yml`).
 
-Callers grant only `contents: read` and `id-token: write` — wrangler-action
-posts no PR comments and creates no GitHub deployments. Configure
-`DOPPLER_PRODUCTION_IDENTITY_ID` as an Actions repository variable in each
-caller (a repository deploys to one platform, so the name does not collide
-with Vercel callers).
+Deploys are serialized by the reusable workflow itself (one job-level
+concurrency group per worker; production runs are never cancelled, a
+preview run is superseded by the next push), so callers need no concurrency
+block. Do not add one with `cancel-in-progress: true`: it would cancel a
+production upload.
+
+Callers grant `contents: read`, `id-token: write` and `pull-requests: write`
+(the preview URL comment). A production-only caller grants
+`pull-requests: write` too: reusable workflows cannot elevate beyond the
+caller's token permissions, and the `comment` job requests it. Configure
+`DOPPLER_CF_PREVIEW_IDENTITY_ID` and `DOPPLER_CF_PRODUCTION_IDENTITY_ID` as
+Actions repository variables in each caller. Callers that predate previews
+use `DOPPLER_PRODUCTION_IDENTITY_ID`; the `CF` names let a repository call
+`vercel-deploy.yml` and this workflow side by side during a migration. Do
+not set `environment:` on the caller job: it changes the OIDC subject, and
+no identity would match.
 
 ### Inputs
 
 | Name          | Required | Default | Description                                                          |
 | ------------- | -------- | ------- | -------------------------------------------------------------------- |
-| `project`     | unless `sync-secrets` is false | — | Doppler project holding the worker's runtime secrets in `prd`; every value there is pushed to the worker. |
-| `sync-secrets` | no      | `true`  | Whether the worker has runtime secrets to push. `false` skips both the `<project>` / `prd` fetch and the push step. |
-| `identity-id` | yes      | —       | Production Doppler service-account identity; loads the shared `cloudflare-deploy-configs`, and `<project>` / `prd` unless `sync-secrets` is false. |
+| `project`     | when `sync-secrets` is true, and for every pull request | — | Doppler project holding the app's config in `prd` and `preview`. Also names the preview worker `<project>-pr-<number>`. |
+| `sync-secrets` | no      | `true`  | Whether the worker has runtime secrets to push. `false` skips the push step; without `build-command` it also skips the config fetch. |
+| `build-command` | no     | —       | Command that builds the app before the deploy (e.g. `bun run build`), run in `working-directory` with the Doppler config as its environment. |
+| `working-directory` | no | `.`     | Directory holding the wrangler config, relative to the repository root. |
+| `identity-id` | yes      | —       | Doppler service-account identity for the event: preview for a pull request, production for a push to the default branch. |
 
 ### Outputs
 
 | Name             | Description                                              |
 | ---------------- | -------------------------------------------------------- |
-| `deployment-url` | Production URL from wrangler. Empty for a worker with no `workers.dev` subdomain or route; the first target only for a multi-route worker. |
+| `deployment-url` | Production or preview URL from wrangler. Empty for a worker with no `workers.dev` subdomain or route; the first target only for a multi-route worker. |
 
 ### Doppler setup
 
 1. In `webops-shared-prod`, create the `cloudflare-deploy-configs` config
    with `CLOUDFLARE_API_TOKEN` (visibility Masked; Cloudflare permissions:
-   Workers Scripts Edit) and `CLOUDFLARE_ACCOUNT_ID`. Keep ONLY those two
-   values there — every value in the config is fetched onto the runner as a
-   step output.
-2. Keep each worker's runtime secrets in `<project>` / `prd` (visibility
-   Masked). Keep ONLY runtime secrets there — every value is pushed to the
-   worker. The production identity gets read access to it. A worker with no
-   runtime secrets skips this step: its caller sets `sync-secrets: false`.
-   Do not create an empty `prd` config for it.
-3. Create one production identity per repository, as in the Vercel
-   production setup: subject `repo:<org>/<repo>:ref:refs/heads/<default>`,
-   claims `event_name: push`, `ref: refs/heads/<default>`, and
-   `job_workflow_ref: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha>`,
-   with read access to `webops-shared-prod` / `cloudflare-deploy-configs`
-   and `<project>` / `prd` (the first only for a `sync-secrets: false` caller).
-4. Pass the identity ID as `identity-id` and the Doppler project as
-   `project` in the caller, or `sync-secrets: false` and no `project` for a
-   worker with no runtime secrets.
+   Workers Scripts Edit, plus Workers Routes Edit when workers declare
+   routes) and `CLOUDFLARE_ACCOUNT_ID` of the production account, and the
+   `cloudflare-preview-deploy-configs` config with the same two keys for
+   the preview account. Keep ONLY those two values in each — every value in
+   the config is fetched onto the runner as a step output.
+2. Keep each app's config in `<project>` / `prd` and `<project>` / `preview`
+   (visibility Masked). With `sync-secrets` every value there is pushed to
+   the worker; with `build-command` every value is the build's environment.
+   A worker with no runtime secrets and no build skips this step: its caller
+   sets `sync-secrets: false`. Do not create an empty `prd` config for it.
+3. Create two service accounts per repository, each with one identity.
+   Doppler grants access per service account, so a preview identity on the
+   production service account could read production.
+   - Production: subject `repo:<org>/<repo>:ref:refs/heads/<default>`,
+     claims `event_name: push`, `ref: refs/heads/<default>`, and
+     `job_workflow_ref: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha>`,
+     with read access to `webops-shared-prod` / `cloudflare-deploy-configs`
+     and `<project>` / `prd`.
+   - Preview: subject `repo:<org>/<repo>:pull_request`, claims
+     `event_name: pull_request` and the same `job_workflow_ref`, with read
+     access to `webops-shared-prod` / `cloudflare-preview-deploy-configs`
+     and `<project>` / `preview`.
+
+   Do not reuse the repository's Vercel service account for either one.
+4. Pass the event-appropriate identity ID as `identity-id` and the Doppler
+   project as `project` in the caller, or `sync-secrets: false` and no
+   `project` for a production-only worker with no runtime secrets.
 
 ## Render deploy
 
@@ -486,8 +549,8 @@ and SHA pin. The reusable workflow checks the event, the `/review` or
 and fails closed.
 
 See `examples/` for the current Katana APR, yvUSD APR, fapy-hook (Vercel),
-rpc-read-proxy (Cloudflare Workers), kong-ingest (Render) and
-claude-code-review shapes. See `specs/doppler-vercel.md`,
+rpc-read-proxy, cloudflare-site and cloudflare-monorepo (Cloudflare
+Workers), kong-ingest (Render) and claude-code-review shapes. See `specs/doppler-vercel.md`,
 `specs/doppler-cloudflare.md`, `specs/doppler-render.md` and
 `specs/claude-code-review.md` for the full operating guides.
 

@@ -36,7 +36,14 @@ for R in $REPOS; do
   WTS+=("$L|$D")
   FILES=$(grep -rlE "$PAT" "$D/.github/workflows" 2>/dev/null || true)
   [ -n "$FILES" ] || { echo "skip $R: no match"; continue; }
-  for F in $FILES; do sed -i.bak -E "s#($PAT)[^[:space:]]+#\1$SHA#g" "$F" && rm "$F.bak"; done
+  for F in $FILES; do
+    sed -i.bak -E "s#($PAT)[^[:space:]]+#\1$SHA#g" "$F" && rm "$F.bak"
+    # cloudflare-deploy.yml has a preview comment job; a caller that does not
+    # grant pull-requests: write is rejected when the run starts.
+    if grep -q 'cloudflare-deploy\.yml@' "$F" && ! grep -q 'pull-requests: write' "$F"; then
+      perl -pi -e 's/^(\s*)id-token: write\s*$/$1id-token: write\n$1pull-requests: write\n/' "$F"
+    fi
+  done
   if git -C "$D" diff --quiet; then echo "skip $R: already $SHORT"; continue; fi
   echo "== $R"; git -C "$D" --no-pager diff --stat
   if [ $DRY = 1 ]; then git -C "$D" --no-pager diff -U0 | grep '^[-+] '; continue; fi

@@ -16,6 +16,9 @@ on:
 permissions:
   contents: read
   id-token: write
+  # Requested by the reusable workflow's preview comment job, so even a
+  # production-only caller must grant it.
+  pull-requests: write
 
 cache-mode: none
 
