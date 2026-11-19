@@ -55,10 +55,10 @@ env:
   # Pull requests deploy previews; any other trigger (push to the default
   # branch) deploys production.
   DEPLOY_ENV: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
-  # Previews use a token for a separate Cloudflare account. Pull request code
-  # runs on the runner and can mint the OIDC token, so whatever the preview
-  # identity can read must be unable to touch production workers or zones.
-  DEPLOY_CONFIG: ${{ github.event_name == 'pull_request' && 'cloudflare-preview-deploy-configs' || 'cloudflare-deploy-configs' }}
+  # Previews and production share one Cloudflare account and token, the way
+  # vercel-deploy.yml shares deploy-configs. Pull request code runs on the
+  # runner and can read this token (see specs/doppler-cloudflare.md).
+  DEPLOY_CONFIG: cloudflare-deploy-configs
   SECRETS_CONFIG: ${{ github.event_name == 'pull_request' && 'preview' || 'prd' }}
   # One worker per pull request, redeployed on every push to it.
   PREVIEW_NAME: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', inputs.project, github.event.pull_request.number) || '' }}
