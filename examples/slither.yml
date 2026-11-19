@@ -1,0 +1,21 @@
+name: Slither
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: slither-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    uses: yearn/yearn-gha/.github/workflows/slither.yml@<approved-sha> # pin to the approved full commit SHA
+    # Optional overrides:
+    # with:
+    #   fail-on: medium
+    #   filter-paths: lib/
