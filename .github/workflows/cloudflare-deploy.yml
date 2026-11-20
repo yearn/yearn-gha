@@ -38,12 +38,22 @@ on:
         type: string
       identity-id:
         description: >-
-          Doppler service account identity ID for the event. Pull requests
-          must use an identity on a preview-only service account; pushes to
-          the default branch use the production identity. Never put both
-          identities on one service account because Doppler permissions are
-          granted to the service account, not the identity.
+          Doppler identity for the deploy job, which runs in the
+          cloudflare-preview or cloudflare-production GitHub environment and
+          executes no repository code. Pull requests use the preview deploy
+          identity, pushes the production one. Each sits on its own service
+          account, because Doppler grants access per service account.
         required: true
+        type: string
+      build-identity-id:
+        description: >-
+          Doppler identity for the build job, which runs the repository's code.
+          Pull requests use an identity on a service account that reads only
+          <project>/preview; pushes use one that reads <project>/prd. Required
+          when the build needs the app config (a build:cloudflare script or
+          build-command).
+        required: false
+        default: ""
         type: string
     outputs:
       deployment-url:
@@ -51,46 +61,39 @@ on:
         value: ${{ jobs.deploy.outputs.deployment-url }}
 
 env:
-  # Only previews use a shared deploy credential. It is Workers-product Admin
-  # in a separate account containing no production resources, because dynamic
-  # <project>-pr-<number> workers cannot be scoped before they exist.
-  # Production credentials live in <project>/cloudflare-deploy-configs and
-  # carry Individual Workers Editor for that one existing worker.
+  # Only previews use a shared deploy credential. It is Workers-product Admin,
+  # because dynamic <project>-pr-<number> workers cannot be scoped before
+  # they exist. Production credentials live in <project>/cloudflare-deploy-configs
+  # and carry Individual Workers Editor for that one existing worker.
   SHARED_PROJECT: webops-shared-prod
   # Pull requests deploy previews; any other trigger (push to the default
   # branch) deploys production.
   DEPLOY_ENV: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
-  # Pull request code runs on the runner and can mint its OIDC token. Select a
-  # token for a separate preview-only Cloudflare account so a compromised PR
-  # cannot read or modify production workers, routes, or secrets. Production
-  # selects a per-worker config instead of the shared preview config.
   DEPLOY_CONFIG: ${{ github.event_name == 'pull_request' && 'cloudflare-preview-deploy-configs' || 'cloudflare-deploy-configs' }}
-  # The preview service account may read only preview; production may read
-  # only prd. Keeping both configs in one app project is safe only with those
-  # config-level grants in place.
   SECRETS_CONFIG: ${{ github.event_name == 'pull_request' && 'preview' || 'prd' }}
   # One worker per pull request, redeployed on every push to it.
   PREVIEW_NAME: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', inputs.project, github.event.pull_request.number) || '' }}
+  # The deploy job installs this wrangler itself; the repository's lockfile
+  # never chooses the binary that holds the Cloudflare token.
+  WRANGLER_VERSION: "4.165.0"
 
 jobs:
-  deploy:
-    name: Deploy to Cloudflare Workers
+  # Runs the repository's code: install, build and wrangler bundling. It holds
+  # no Cloudflare credential, and its Doppler identity can read only the app
+  # config of the event (preview or prd). Pull request code can mint that
+  # identity's OIDC token, so nothing more sensitive than <project>/preview
+  # is reachable from here.
+  build:
+    name: Build
     if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
-    # Serialize per worker so two rapid pushes cannot race and leave it on the
-    # older commit. Production is not cancel-in-progress: killing a wrangler
-    # deploy mid-upload has no defined outcome, and GitHub supersedes the
-    # queued run instead, so the newest commit still wins. A preview is
-    # redeployed by the run that cancels it.
     concurrency:
-      group: cloudflare-deploy-${{ github.repository }}-${{ inputs.project }}-${{ inputs.working-directory }}-${{ github.event.pull_request.number || 'production' }}
+      group: cloudflare-build-${{ github.repository }}-${{ inputs.project }}-${{ inputs.working-directory }}-${{ github.event.pull_request.number || 'production' }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     cache-mode: none
     permissions:
       contents: read
       id-token: write
-    outputs:
-      deployment-url: ${{ steps.deploy.outputs.deployment-url || steps.deploy-retry.outputs.deployment-url }}
     steps:
       # Fork PRs never receive an OIDC token; fail explicitly instead of
       # letting the Doppler login error obscure the cause.
@@ -140,35 +143,23 @@ jobs:
             echo "found=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # Unlike Vercel there is no remote build: the app is built and bundled
-      # on the runner, so project dependencies must be installed. The fleet
-      # standardizes on bun, so the caller repository must ship a bun
-      # lockfile. The app's own install runs before the Doppler fetch, so its
-      # install scripts never see the deploy credentials; this is not an
-      # authorization boundary, because any step in this job can mint the
-      # OIDC token itself. Both bun and wrangler are pinned: bun here,
-      # wrangler by the app repository's lockfile.
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.4"
           no-cache: true
 
-      # Builds run through the app's own scripts, which call node. Pin it
-      # rather than inherit whatever the runner image ships.
+      # Builds and wrangler's bundler run on node. Pin it rather than inherit
+      # whatever the runner image ships.
       - name: Set up Node
-        if: steps.build-script.outputs.found == 'true' || inputs.build-command != ''
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           package-manager-cache: false
 
-      # --frozen-lockfile only rejects a lockfile that would change; with no
-      # lockfile at all bun resolves every dependency fresh from the registry,
-      # wrangler included, which defeats the app-lockfile wrangler pin. Assert the
-      # lockfile explicitly, before the install and before any credential. A
-      # standalone package keeps its lockfile in working-directory; a
-      # workspace keeps it at the repository root.
+      # Without a lockfile bun resolves every dependency fresh from the
+      # registry. A standalone package keeps its lockfile in
+      # working-directory; a workspace keeps it at the repository root.
       - name: Assert caller ships a bun lockfile
         id: lockfile
         env:
@@ -180,58 +171,32 @@ jobs:
               exit 0
             fi
           done
-          echo "::error::caller repository must ship bun.lock or bun.lockb in working-directory or at the repository root; without one bun resolves wrangler fresh from the registry and the wrangler pin is lost" >&2
+          echo "::error::caller repository must ship bun.lock or bun.lockb in working-directory or at the repository root" >&2
           exit 1
 
       - name: Install dependencies
         working-directory: ${{ steps.lockfile.outputs.dir }}
         run: bun install --frozen-lockfile
 
-      # wrangler-action passes no wranglerVersion, so it decides whether to
-      # install by running `bun run wrangler --version` (its bun execNoInstall
-      # command) in working-directory and parsing stdout for a wrangler
-      # version; a non-zero exit or no parseable version triggers an unpinned
-      # install in the step that already holds the token. Run that exact
-      # command here, before any credential is fetched, and fail unless stdout
-      # carries a version.
-      - name: Assert wrangler runs locally
-        working-directory: ${{ inputs.working-directory }}
+      - name: Require a build identity
+        if: (steps.build-script.outputs.found == 'true' || inputs.build-command != '') && inputs.build-identity-id == ''
         run: |
-          set -euo pipefail
-          if ! stdout=$(bun run wrangler --version); then
-            echo "::error::wrangler must be an installed, runnable dependency of the caller repository (pinned in its lockfile); wrangler-action must not install one alongside the deploy token. Probe stdout: ${stdout}" >&2
-            exit 1
-          fi
-          version=$(printf '%s\n' "$stdout" | grep -Eo -m1 'wrangler [0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?|^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' || true)
-          if [[ -z "$version" ]]; then
-            echo "::error::\`bun run wrangler --version\` printed no wrangler version, so wrangler-action would install an unpinned wrangler alongside the deploy token. Probe stdout: ${stdout}" >&2
-            exit 1
-          fi
-          printf 'local wrangler: %s\n' "$version"
+          echo "::error::the build reads the app config from Doppler; pass build-identity-id (preview build identity for pull requests, production build identity for pushes)" >&2
+          exit 1
 
-      # The app's Doppler config (prd or preview) is read as step outputs,
-      # never injected into the job environment. The event-specific identity
-      # must be on a service account that can read only this config; PR code
-      # can mint the preview identity's OIDC token directly. The values feed
-      # two steps through explicit env mapping: the build, and the secrets
-      # push. A caller with sync-secrets: false and no build skips the fetch,
-      # so no application secret is fetched at all.
+      # The app's Doppler config (prd or preview) is read as step outputs and
+      # handed to the build step only, never through GITHUB_ENV.
       - name: Load app config from Doppler
         id: app-config
-        if: inputs.sync-secrets || steps.build-script.outputs.found == 'true' || inputs.build-command != ''
+        if: steps.build-script.outputs.found == 'true' || inputs.build-command != ''
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
         with:
           auth-method: oidc
-          doppler-identity-id: ${{ inputs.identity-id }}
+          doppler-identity-id: ${{ inputs.build-identity-id }}
           doppler-project: ${{ inputs.project }}
           doppler-config: ${{ env.SECRETS_CONFIG }}
           inject-env-vars: false
 
-      # The build needs the app config as its environment (NEXT_PUBLIC_*,
-      # VITE_* and whatever the framework reads at build time). The values are
-      # exported inside this step only — not through GITHUB_ENV, which would
-      # hand them to every later step, wrangler-action included. The Cloudflare
-      # token has not been fetched yet.
       - name: Build
         if: steps.build-script.outputs.found == 'true' || inputs.build-command != ''
         working-directory: ${{ inputs.working-directory }}
@@ -254,11 +219,174 @@ jobs:
           eval "$exports"
           bash -euo pipefail -c "$command"
 
-      # Preview credentials come from the shared preview-only account config.
-      # Production credentials come from this worker's project and are scoped
-      # by Cloudflare to this one existing Worker. Both configs contain deploy
-      # credentials only. Values remain step outputs; only the validation,
-      # secret push and wrangler-action steps receive them.
+      # Stages what the deploy job uploads: the static assets directory and,
+      # for a worker with code, wrangler's bundle (dry run, no credential).
+      # The deploy job pairs these with the default branch's wrangler config,
+      # so this job's config only decides which files are staged.
+      - name: Stage assets and bundle
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          STAGE: ${{ runner.temp }}/cloudflare-artifact
+        run: |
+          set -euo pipefail
+          config=$(ls wrangler.jsonc wrangler.json wrangler.toml 2>/dev/null | head -n1 || true)
+          if [[ -z "$config" ]]; then
+            echo "::error::no wrangler config in working-directory" >&2
+            exit 1
+          fi
+          env_args=()
+          if [[ "$DEPLOY_ENV" == preview ]]; then
+            env_args=(--env preview)
+          fi
+          read -r main assets < <(CONFIG="$config" ENV_NAME="${env_args[1]:-}" node -e '
+            const path = require("path")
+            const { unstable_readConfig } = require("wrangler")
+            const c = unstable_readConfig({ config: process.env.CONFIG, env: process.env.ENV_NAME || undefined })
+            const dir = path.dirname(path.resolve(process.env.CONFIG))
+            const rel = (p) => (p ? path.relative(process.cwd(), path.resolve(dir, p)) : "-")
+            console.log(rel(c.main), rel(c.assets && c.assets.directory))')
+          mkdir -p "$STAGE"
+          if [[ "$assets" != - ]]; then
+            cp -R "$assets" "$STAGE/assets"
+          fi
+          if [[ "$main" != - ]]; then
+            bun run wrangler deploy --dry-run --outdir "$STAGE/bundle" ${env_args[@]+"${env_args[@]}"}
+          fi
+          ls -A "$STAGE"
+
+      - name: Upload build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cloudflare-build-${{ inputs.project }}
+          path: ${{ runner.temp }}/cloudflare-artifact
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  # Holds the Cloudflare token and runs no repository code: no checkout of the
+  # pull request, no install, no repository scripts. It deploys the build
+  # artifact with the wrangler pinned above and the default branch's wrangler
+  # config, so a pull request cannot change the worker name, routes, bindings
+  # or the binary. The GitHub environment changes the OIDC subject to
+  # repo:<repo>:environment:<name>, which the build job cannot mint, so only
+  # this job's identity can read the deploy config.
+  deploy:
+    name: Deploy to Cloudflare Workers
+    needs: build
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'pull_request' && 'cloudflare-preview' || 'cloudflare-production' }}
+    # Serialize per worker so two rapid pushes cannot race and leave it on the
+    # older commit. Production is not cancel-in-progress: killing a wrangler
+    # deploy mid-upload has no defined outcome, and GitHub supersedes the
+    # queued run instead, so the newest commit still wins.
+    concurrency:
+      group: cloudflare-deploy-${{ github.repository }}-${{ inputs.project }}-${{ inputs.working-directory }}-${{ github.event.pull_request.number || 'production' }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    cache-mode: none
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+    steps:
+      - name: Checkout wrangler config from the default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: default-branch
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            ${{ inputs.working-directory }}/wrangler.jsonc
+            ${{ inputs.working-directory }}/wrangler.json
+            ${{ inputs.working-directory }}/wrangler.toml
+
+      - name: Download build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cloudflare-build-${{ inputs.project }}
+          path: ${{ runner.temp }}/cloudflare-artifact
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Install wrangler
+        env:
+          PREFIX: ${{ runner.temp }}/wrangler
+        run: |
+          set -euo pipefail
+          npm install --prefix "$PREFIX" --no-save --no-audit --no-fund --ignore-scripts "wrangler@${WRANGLER_VERSION}"
+          echo "$PREFIX/node_modules/.bin" >> "$GITHUB_PATH"
+
+      # A clean directory with the default branch's config, the staged assets
+      # at the path that config names, and the bundle as an explicit entry.
+      - name: Assemble deployment
+        id: assemble
+        env:
+          SOURCE: default-branch/${{ inputs.working-directory }}
+          ARTIFACT: ${{ runner.temp }}/cloudflare-artifact
+          OUT: ${{ runner.temp }}/cloudflare-deploy
+          WRANGLER_PKG: ${{ runner.temp }}/wrangler/node_modules/wrangler
+        run: |
+          set -euo pipefail
+          config=$(cd "$SOURCE" 2>/dev/null && ls wrangler.jsonc wrangler.json wrangler.toml 2>/dev/null | head -n1 || true)
+          if [[ -z "$config" ]]; then
+            echo "::error::the default branch has no wrangler config in working-directory; previews deploy only once it is merged" >&2
+            exit 1
+          fi
+          mkdir -p "$OUT"
+          cp "$SOURCE/$config" "$OUT/$config"
+          cd "$OUT"
+          read -r main assets < <(CONFIG="$config" node -e '
+            const path = require("path")
+            const { unstable_readConfig } = require(process.env.WRANGLER_PKG)
+            const c = unstable_readConfig({ config: process.env.CONFIG, env: process.env.DEPLOY_ENV === "preview" ? "preview" : undefined })
+            const rel = (p) => (p ? path.relative(process.cwd(), path.resolve(p)) : "-")
+            const routes = [...(c.routes || []), ...(c.route ? [c.route] : [])]
+            if (process.env.DEPLOY_ENV === "preview" && routes.length) {
+              console.error("::error::the default branch wrangler config gives the preview environment routes")
+              process.exit(1)
+            }
+            console.log(rel(c.main), c.assets && c.assets.directory ? rel(c.assets.directory) : "-")')
+          for p in "$main" "$assets"; do
+            if [[ "$p" != - && ( "$p" == /* || "$p" == ..* ) ]]; then
+              echo "::error::wrangler config paths must stay inside working-directory: $p" >&2
+              exit 1
+            fi
+          done
+          if [[ "$assets" != - ]]; then
+            mkdir -p "$(dirname "$assets")"
+            cp -R "$ARTIFACT/assets" "$assets"
+          fi
+          entry=""
+          if [[ "$main" != - ]]; then
+            name=$(basename "$main")
+            entry=".cloudflare-bundle/${name%.*}.js"
+            cp -R "$ARTIFACT/bundle" .cloudflare-bundle
+            if [[ ! -f "$entry" ]]; then
+              echo "::error::the build bundle has no ${entry}" >&2
+              exit 1
+            fi
+          fi
+          {
+            echo "config=$config"
+            echo "entry=$entry"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Load app config from Doppler
+        id: app-config
+        if: inputs.sync-secrets
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          auth-method: oidc
+          doppler-identity-id: ${{ inputs.identity-id }}
+          doppler-project: ${{ inputs.project }}
+          doppler-config: ${{ env.SECRETS_CONFIG }}
+          inject-env-vars: false
+
       - name: Load Cloudflare token and account ID from Doppler
         id: doppler
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
@@ -269,10 +397,19 @@ jobs:
           doppler-config: ${{ env.DEPLOY_CONFIG }}
           inject-env-vars: false
 
-      - name: Validate Cloudflare credentials
+      # A preview pushes to its own worker. --env is left out on purpose:
+      # wrangler's secret commands append the environment to --name
+      # (<name>-preview), while `wrangler deploy --env preview --name <name>`
+      # deploys to <name>.
+      - name: Push worker runtime secrets to Cloudflare
+        if: inputs.sync-secrets
+        working-directory: ${{ runner.temp }}/cloudflare-deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER_SECRETS: ${{ toJSON(steps.app-config.outputs) }}
+          PROJECT: ${{ inputs.project }}
+          CONFIG: ${{ steps.assemble.outputs.config }}
         run: |
           set -euo pipefail
           for var in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
@@ -281,21 +418,6 @@ jobs:
               exit 1
             fi
           done
-
-      # A preview pushes to its own worker. --env is left out on purpose:
-      # wrangler's secret commands append the environment to --name
-      # (<name>-preview), while `wrangler deploy --env preview --name <name>`
-      # deploys to <name>.
-      - name: Push worker runtime secrets to Cloudflare
-        if: inputs.sync-secrets
-        working-directory: ${{ inputs.working-directory }}
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
-          WORKER_SECRETS: ${{ toJSON(steps.app-config.outputs) }}
-          PROJECT: ${{ inputs.project }}
-        run: |
-          set -euo pipefail
           secrets=$(jq -c 'del(.DOPPLER_PROJECT, .DOPPLER_CONFIG, .DOPPLER_ENVIRONMENT)' <<<"$WORKER_SECRETS")
           if [[ "$(jq 'length' <<<"$secrets")" -eq 0 ]]; then
             echo "::error::no worker secrets resolved from Doppler project ${PROJECT} config ${SECRETS_CONFIG}" >&2
@@ -305,38 +427,48 @@ jobs:
           if [[ -n "$PREVIEW_NAME" ]]; then
             name_args=(--name "$PREVIEW_NAME")
           fi
-          printf '%s' "$secrets" | bun run wrangler secret bulk ${name_args[@]+"${name_args[@]}"}
-
-      # packageManager is explicit: wrangler-action otherwise detects it from
-      # the lockfile in workingDirectory, falls back to npm when there is none
-      # (a workspace package), and would then probe and install with npm
-      # instead of the bun probe above. A preview deploys the wrangler
-      # config's `preview` environment under the per-pull-request name.
-      - name: Deploy to Cloudflare Workers
-        id: deploy
-        continue-on-error: true
-        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
-        with:
-          apiToken: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: ${{ inputs.working-directory }}
-          packageManager: bun
-          command: ${{ env.DEPLOY_ENV == 'preview' && format('deploy --env preview --name {0}', env.PREVIEW_NAME) || 'deploy' }}
+          printf '%s' "$secrets" | wrangler secret bulk --config "$CONFIG" ${name_args[@]+"${name_args[@]}"}
 
       # On the first deploy of a new worker name, wrangler uploads the script
-      # and then reads it back from /workers/workers/<name>, which can still
-      # answer 10007 "does not exist"; wrangler does not retry a 404. The
-      # worker exists by then, so a second deploy succeeds.
-      - name: Retry deploy to Cloudflare Workers
-        id: deploy-retry
-        if: steps.deploy.outcome == 'failure'
-        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
-        with:
-          apiToken: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: ${{ inputs.working-directory }}
-          packageManager: bun
-          command: ${{ env.DEPLOY_ENV == 'preview' && format('deploy --env preview --name {0}', env.PREVIEW_NAME) || 'deploy' }}
+      # and then reads it back from /workers/workers/<name>, which can answer
+      # 10007 "does not exist" for a few minutes; wrangler does not retry a
+      # 404. Redeploying after a pause succeeds once the worker is visible.
+      - name: Deploy to Cloudflare Workers
+        id: deploy
+        working-directory: ${{ runner.temp }}/cloudflare-deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
+          CONFIG: ${{ steps.assemble.outputs.config }}
+          ENTRY: ${{ steps.assemble.outputs.entry }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.json
+        run: |
+          set -euo pipefail
+          for var in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [[ -z "${!var:-}" ]]; then
+              echo "::error::${var} must resolve from its configured Doppler project" >&2
+              exit 1
+            fi
+          done
+          args=(deploy --config "$CONFIG")
+          if [[ -n "$ENTRY" ]]; then
+            args+=("$ENTRY" --no-bundle)
+          fi
+          if [[ "$DEPLOY_ENV" == preview ]]; then
+            args+=(--env preview --name "$PREVIEW_NAME")
+          fi
+          for attempt in 1 2 3 4; do
+            if wrangler "${args[@]}"; then
+              url=$(jq -rs '[.[] | select(.type == "deploy") | .targets[]?] | map(select(test("^https://"))) | first // empty' "$WRANGLER_OUTPUT_FILE_PATH")
+              echo "deployment-url=${url}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [[ $attempt -lt 4 ]]; then
+              echo "deploy attempt ${attempt} failed; retrying in 60s"
+              sleep 60
+            fi
+          done
+          exit 1
 
   # Separate job so the token that can write to the pull request never shares
   # a runner with pull request code or the deploy credentials.
@@ -383,6 +515,7 @@ jobs:
     concurrency:
       group: cloudflare-deploy-${{ github.repository }}-${{ inputs.project }}-${{ inputs.working-directory }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true
+    environment: cloudflare-preview
     cache-mode: none
     permissions:
       id-token: write

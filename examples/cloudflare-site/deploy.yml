@@ -36,3 +36,4 @@ jobs:
       sync-secrets: false
       build-command: bun run build
       identity-id: ${{ github.event_name == 'pull_request' && vars.DOPPLER_CF_PREVIEW_IDENTITY_ID || vars.DOPPLER_CF_PRODUCTION_IDENTITY_ID }}
+      build-identity-id: ${{ github.event_name == 'pull_request' && vars.DOPPLER_CF_PREVIEW_BUILD_IDENTITY_ID || vars.DOPPLER_CF_PRODUCTION_BUILD_IDENTITY_ID }}

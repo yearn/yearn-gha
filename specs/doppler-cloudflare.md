@@ -30,12 +30,13 @@ The guide distinguishes three kinds of data:
 
 Doppler has a managed sync integration for Cloudflare **Pages**, but not for Cloudflare **Workers** — Workers is documented under Doppler's DIY syncs (`doppler secrets --json | jq … | wrangler secret bulk`). The workflow runs that flow on each deploy and uses the OIDC identity instead of a service token:
 
-1. **`Load app config from Doppler`** (step `app-config`). `dopplerhq/secrets-fetch-action` v2.0.0 with `auth-method: oidc`, the caller's `identity-id`, `doppler-project: ${{ inputs.project }}`, `doppler-config` `prd` or `preview`, and `inject-env-vars: false`. The values are step outputs, not job env. It runs when `sync-secrets` is true or the app has a build.
-2. **`Build`**, only when the app has a build. The build is the `build:cloudflare` script in the app's `package.json`, run as `bun run build:cloudflare`; an app without that script falls back to the `build-command` input. The step exports the config inside its own shell and runs the command in `working-directory`. Nothing goes through `GITHUB_ENV`, so later steps — wrangler-action included — do not inherit the values. The Cloudflare token is fetched after this step.
-3. **`Push worker runtime secrets to Cloudflare`**, only with `sync-secrets`. A `run` step. Its `env` maps `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the event-specific deploy fetch outputs and `WORKER_SECRETS: ${{ toJSON(steps.app-config.outputs) }}`. It then:
+1. **`build` job, `Load app config from Doppler`**, only when the app has a build. `dopplerhq/secrets-fetch-action` v2.0.0 with `auth-method: oidc`, the caller's `build-identity-id`, `doppler-project: ${{ inputs.project }}`, `doppler-config` `prd` or `preview`, and `inject-env-vars: false`. The values are step outputs, not job env.
+2. **`build` job, `Build`**. The build is the `build:cloudflare` script in the app's `package.json`, run as `bun run build:cloudflare`; an app without that script falls back to the `build-command` input. The step exports the config inside its own shell and runs the command in `working-directory`. Nothing goes through `GITHUB_ENV`. This job never fetches a Cloudflare token.
+3. **`deploy` job, `Load app config from Doppler`**, only with `sync-secrets`, with the caller's `identity-id` (the deploy identity).
+4. **`deploy` job, `Push worker runtime secrets to Cloudflare`**, only with `sync-secrets`. A `run` step. Its `env` maps `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from the event-specific deploy fetch outputs and `WORKER_SECRETS: ${{ toJSON(steps.app-config.outputs) }}`. It then:
    - removes the Doppler meta keys with `jq 'del(.DOPPLER_PROJECT, .DOPPLER_CONFIG, .DOPPLER_ENVIRONMENT)'`. The fetch action emits these keys as unmasked outputs; they are not worker secrets.
    - fails with `::error::` if zero secrets remain. This catches a wrong `project` or an empty config.
-   - pipes the JSON to `bun run wrangler secret bulk` on stdin, adding `--name <project>-pr-<number>` for a preview. wrangler prints key names only.
+   - pipes the JSON to the workflow-pinned `wrangler secret bulk` on stdin, adding `--name <project>-pr-<number>` for a preview. wrangler prints key names only.
 
 ### Workers with no runtime secrets
 
@@ -76,14 +77,14 @@ Behaviour to know:
 
 A pull request from a branch of the caller repository deploys its own worker, `<project>-pr-<number>`, to the preview account, and redeploys it on every push. Closing the pull request deletes it.
 
-- **Deploy.** `wrangler deploy --env preview --name <project>-pr-<number>`. The app's wrangler config must define a `preview` environment that is safe outside production: `workers_dev: true`, `routes: []`, no cron triggers, and bindings that point at resources in the preview account. Top-level settings that wrangler inherits (`routes`, `triggers`, `assets`, `main`) apply to the preview unless the environment overrides them.
+- **Deploy.** The `build` job uploads the assets directory and wrangler's bundle as an artifact. The `deploy` job runs `wrangler deploy <bundle> --no-bundle --env preview --name <project>-pr-<number>` with the wrangler pinned in the workflow and the wrangler config from the caller's default branch, never the pull request's. That config must define a `preview` environment that is safe outside production: `workers_dev: true`, `routes: []` (the deploy job fails on any preview route), no cron triggers, and bindings that do not point at production data. Top-level settings that wrangler inherits (`triggers`, `assets`, `main`) apply to the preview unless the environment overrides them. A pull request's own config changes, including the first config of a migration, reach previews only after they merge.
 - **Secrets.** The workflow pushes `<project>` / `preview` with `wrangler secret bulk --name <project>-pr-<number>`. `--env` is deliberately absent there: wrangler's secret commands append the environment to `--name` (`<name>-preview`), while `wrangler deploy --env preview --name <name>` deploys to `<name>`. Read from the wrangler 4.140.0 and 4.165.0 sources; recheck when a caller pins a wrangler outside that range.
 - **Naming.** `project` names the preview worker. In a pull request run the caller workflow comes from the pull request, so the input is untrusted: the workflow rejects a name that is not lowercase letters, digits and dashes, at most 63 characters, before any credential is fetched.
 - **URL.** The `deployment-url` output is the worker's `workers.dev` URL in the preview account. A `comment` job posts it on the pull request, one comment per project, updated in place. That job holds `pull-requests: write` and nothing else, and never checks out the repository.
 - **Cleanup.** On `pull_request` `closed` a `delete` job removes the worker through the Cloudflare API (`DELETE /accounts/{id}/workers/scripts/{name}?force=true`). It has no checkout and no install. The caller must subscribe to the `closed` type, or previews accumulate against the account's script limit.
 - **Fork pull requests** are rejected: no OIDC token is issued to them.
 
-What a pull request can reach: the preview account's token and the app's `preview` config. It cannot reach `cloudflare-deploy-configs` or `<project>` / `prd`, because those are readable only by the production service account, whose identity is bound to a push to the default branch. Preview URLs are public; put Cloudflare Access in front of the preview account's `workers.dev` hostnames if an app's preview must not be.
+What a pull request can reach: the app's `preview` config, through the preview build identity. It cannot reach the preview token, `cloudflare-deploy-configs` or `<project>` / `prd`: those are readable only by the deploy identities, whose subjects name the `cloudflare-preview` / `cloudflare-production` GitHub environments that only the reusable workflow's `deploy` and `delete` jobs use. Preview URLs are public; put Cloudflare Access in front of the preview account's `workers.dev` hostnames if an app's preview must not be.
 
 ## What this design protects—and what it does not
 
@@ -94,17 +95,17 @@ Provided controls:
 - Worker runtime secrets have one source of truth (`<project>` / `prd`, `<project>` / `preview`) and reach Cloudflare on every deploy, with no operator step.
 - One trusted reusable workflow implements event checks, action pins, the bun and node pins, and validation.
 - Callers pin the reusable workflow to a full commit SHA; Doppler identities bind `job_workflow_ref` to that SHA.
-- Production credentials are reachable only from a push to the default branch. Pull requests reach only the preview account and the `preview` config; fork pull requests and every other event reach nothing.
+- Cloudflare tokens are fetched only in the `deploy` and `delete` jobs, which run no repository code: no pull request checkout, no install, no repository scripts, wrangler pinned by this workflow, wrangler config from the default branch.
+- Pull requests reach only the `preview` config; fork pull requests and every other event reach nothing.
 
 Not eliminated:
 
-- `CLOUDFLARE_API_TOKEN` is still a long-lived credential exposed to wrangler on the runner. A production compromise reaches that one Worker; a preview compromise reaches every preview Worker in the isolated preview account.
-- **Pull request code can read the preview token and the `preview` config.** A same-repository pull request — a poisoned dependency bump included — runs its install and build in a job that can mint the preview identity's OIDC token. The damage is bounded by what the preview account holds: other previews and their secrets. Keep production resources out of that account and production values out of `preview` configs.
-- **The build runs on the runner.** Unlike Vercel remote builds, the app is built and bundled on the runner, so third-party dependency code executes during the deploy. The workflow narrows the exposure: the app's own `bun install` runs before the Doppler fetches, and all values are read as step outputs (`inject-env-vars: false`) rather than injected into the job environment, so that install's scripts never see them; after the fetches, only the build step, the validate step and the push step (explicit env mapping) and the wrangler-action inputs receive them. The workflow also passes no `wranglerVersion`, and before any credential is fetched runs `bun run wrangler --version` in `working-directory` — the exact command wrangler-action runs for a bun caller to decide whether to install — failing unless it exits 0 and stdout carries a parseable wrangler version, the same test wrangler-action applies, so wrangler-action runs no install of its own in the step that holds the token. `packageManager: bun` is passed explicitly, because wrangler-action otherwise detects the package manager from the lockfile in its working directory and falls back to npm for a workspace package. Residual risk: dependency code that wrangler-action bundles still runs in that step, and wrangler runs in the push step; a compromised dependency can exfiltrate the token there. Mitigation is dependency hygiene (lockfiles, review of lockfile diffs), not this workflow.
-- **The build sees the app config.** With a build, the whole `prd` (or `preview`) config is the build's environment, so the build toolchain and its dependencies can read it.
-- **App secrets land on the deploy runner.** They are step outputs of `app-config` and go to the build step and one `run` step through explicit env. A compromised dependency in the build, the push step or the wrangler-action step can read them.
-- **Step ordering is not an authorization boundary.** `id-token: write` is job-scoped, so any code that runs earlier in the job can mint the same OIDC token and fetch from Doppler itself. Running the install first keeps the fetched values out of the install step's environment; it does not keep dependency code away from the credential or the app secrets.
-- **A missing `preview` environment is only a wrangler warning.** `wrangler deploy --env preview` falls back to the top-level config when the environment is absent. In the preview account a production route then fails the deploy, but a cron trigger would run. The workflow does not parse the wrangler config to check.
+- `CLOUDFLARE_API_TOKEN` is still a long-lived credential exposed to the pinned wrangler on the deploy runner. A production compromise reaches that one Worker; the preview token is Workers-product Admin in the preview account, so a compromise of the deploy job or of wrangler itself reaches every Worker there. A separate preview account bounds that.
+- **Pull request code can read the `preview` config.** The build job runs the pull request's install and build and can mint the preview build identity's OIDC token. Keep production values out of `preview` configs.
+- **Pull request code runs on Cloudflare.** The preview worker executes the pull request's bundle with its preview secrets and the default branch's bindings. Do not bind production data in the `preview` environment.
+- **The build sees the app config.** With a build, the whole `prd` (or `preview`) config is the build's environment, and the artifact (kept one day, readable by repository readers) contains whatever the build inlines. Do not inline server-only secrets.
+- **The deploy job installs wrangler from npm** at an exact version with `--ignore-scripts`; its transitive dependencies resolve from their published ranges. Upgrade `WRANGLER_VERSION` through a reviewed change.
+- **A missing `preview` environment is only a wrangler warning.** `wrangler deploy --env preview` falls back to the top-level config when the environment is absent. Top-level routes then fail the deploy job's route check, but a cron trigger would run.
 - **Stale secrets stay.** `secret bulk` is additive. A key removed from Doppler stays on the worker until an operator deletes it.
 - **Secrets land before code.** `secret bulk` creates a worker version with the new secrets before `wrangler deploy` uploads the new code. For a short window the old code runs with the new secrets. Keep secret changes backward compatible across one deploy.
 - OIDC policy is an authorization boundary only when all relevant claims are checked; identity IDs are public metadata.
@@ -113,8 +114,8 @@ Not eliminated:
 
 - A small caller workflow in each repository invokes the SHA-pinned reusable workflow in `yearn/yearn-gha`.
 - A pull request deploys a preview worker; a push to the caller repository's default branch runs the production `wrangler deploy`. Everything else is rejected before Doppler authentication.
-- The workflow asserts the caller ships `bun.lock` or `bun.lockb`, installs dependencies with `bun install --frozen-lockfile` (the fleet standardizes on bun; the version is pinned in `.github/workflows/cloudflare-deploy.yml`), probes that the local wrangler runs, fetches the app config and runs the app's build if there is one, then fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as step outputs and validates them. It then pushes the runtime secrets with `bun run wrangler secret bulk` and runs `wrangler deploy` via `cloudflare/wrangler-action`. No `wranglerVersion` is passed: wrangler-action uses the wrangler the app repository already installed, so the wrangler pin is the app's lockfile.
-- **Precondition: the caller repository ships a bun lockfile** (`bun.lock` or `bun.lockb`) and a wrangler devDependency. The lockfile is looked up in `working-directory` first (a standalone package), then at the repository root (a workspace), and the install runs where it is found. A missing lockfile fails an explicit check before the install: `--frozen-lockfile` only rejects a lockfile that would change, so with none present bun resolves every dependency — wrangler included — fresh from the registry. A stale lockfile fails the frozen install. A lockfile that never lists a runnable wrangler fails the `bun run wrangler --version` probe (must exit 0 and print a wrangler version). All three run before Doppler is reached.
+- `build` job: asserts the caller ships `bun.lock` or `bun.lockb` (in `working-directory`, else the repository root), installs with `bun install --frozen-lockfile`, fetches the app config with the build identity and runs the app's build if there is one, bundles the worker with the app's wrangler (`wrangler deploy --dry-run --outdir`), and uploads the assets directory and bundle.
+- `deploy` job (`cloudflare-preview` / `cloudflare-production` environment): checks out only the wrangler config from the default branch, downloads the artifact, installs `wrangler@WRANGLER_VERSION`, fetches the app config (with `sync-secrets`) and `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` with the deploy identity, pushes secrets with `wrangler secret bulk`, and runs `wrangler deploy <bundle> --no-bundle`. A first deploy that reads the new worker back as missing (10007) is retried up to three times, a minute apart.
 - Post-deploy verification (smoke tests) stays in the caller as a `needs: deploy` job — the reusable workflow is deploy-only.
 - Output: `deployment-url` — the production or preview URL parsed by the action. It is empty for a worker with no `workers.dev` subdomain or route, and is only the first target for a multi-route worker.
 
@@ -173,7 +174,7 @@ Output: `deployment-url` (production or preview URL).
 - **One token per preview Worker or a name-prefix token.** Cloudflare cannot scope a token to a Worker that does not exist yet or to a future name prefix. A single Workers-product `Admin` token is therefore used only in an account that contains previews and no production resource.
 - **`workflow_dispatch` manual deploys.** Same rationale as Vercel: broadens deployment authority and bypasses the event gate. Add a separately reviewed, approval-gated manual path only if an operational need emerges.
 - **Out-of-band operator sync (previous design).** An operator ran the DIY `wrangler secret bulk` flow by hand with a config-scoped Doppler token. Doppler and the worker drifted between manual runs, and a deploy gave no guarantee that the worker had the current secrets. Superseded by the in-workflow sync.
-- **`wrangler deploy --secrets-file`.** Atomic with the deploy, so it closes the secrets-before-code window. It requires writing the secrets to a file on disk in the wrangler-action step, and a per-app check that the app's pinned wrangler supports the flag. Revisit when the fleet pins a wrangler version that ships it.
+- **`wrangler deploy --secrets-file`.** Atomic with the deploy, so it closes the secrets-before-code window. It requires writing the secrets to a file on disk in the deploy step. Revisit with the workflow's `WRANGLER_VERSION`.
 
 ## Doppler configuration
 
@@ -203,8 +204,12 @@ Doppler grants access per service account, not per identity. Two identities on o
 
 | Service account | Identity subject | Reads |
 | --------------- | ---------------- | ----- |
-| Production | `repo:<org>/<repo>:ref:refs/heads/<default-branch>` | `<project>` / `cloudflare-deploy-configs`, `<project>` / `prd` |
-| Preview | `repo:<org>/<repo>:pull_request` | `webops-shared-prod` / `cloudflare-preview-deploy-configs`, `<project>` / `preview` |
+| Production deploy | `repo:<org>/<repo>:environment:cloudflare-production` | `<project>` / `cloudflare-deploy-configs`, `<project>` / `prd` |
+| Production build | `repo:<org>/<repo>:ref:refs/heads/<default-branch>` | `<project>` / `prd` |
+| Preview deploy | `repo:<org>/<repo>:environment:cloudflare-preview` | `webops-shared-prod` / `cloudflare-preview-deploy-configs`, `<project>` / `preview` |
+| Preview build | `repo:<org>/<repo>:pull_request` | `<project>` / `preview` |
+
+The GitHub environment on the `deploy` and `delete` jobs is what separates the subjects: the `build` job, which runs repository code, cannot mint an `environment:` subject. A caller job that sets the same environment itself fails the `job_workflow_ref` claim.
 
 For a `sync-secrets: false` caller with no build, grant only its per-project production deploy config; preview still needs the shared preview deploy config if the repository deploys previews. Do not reuse a repository's Vercel service account for either identity: its pull-request identity would gain whatever production access the account is granted here.
 
@@ -213,10 +218,10 @@ Each identity uses:
 - Provider: GitHub (`https://token.actions.githubusercontent.com`)
 - Audience matching the action's token (verify against a real token; usually `https://github.com/<org>`)
 - Subject as in the table (or the immutable-format equivalent)
-- Exact additional claims. Production: `event_name=push`, `ref=refs/heads/<default-branch>`. Preview: `event_name=pull_request`. Both: `job_workflow_ref=yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha>`
+- Exact additional claims. Production deploy and build: `event_name=push`, `ref=refs/heads/<default-branch>`. Preview deploy and build: `event_name=pull_request`. All: `job_workflow_ref=yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha>`
 - No wildcards on claims.
 
-The `job_workflow_ref` condition is mandatory — without it, any workflow in the repository with `id-token: write` can request the identity. Bind it to the same full commit SHA callers pin in `uses:`; update caller pins and identity claims together in a reviewed rollout. Preview and production share one `job_workflow_ref`; the subject and `event_name` claims, and the separate service accounts, are what keep a pull request away from production.
+The `job_workflow_ref` condition is mandatory — without it, any workflow in the repository with `id-token: write` can request the identity. Bind it to the same full commit SHA callers pin in `uses:`; update caller pins and identity claims together in a reviewed rollout. All four share one `job_workflow_ref`; the subject and `event_name` claims, and the separate service accounts, are what keep a pull request away from the deploy credentials.
 
 ## GitHub controls
 
@@ -224,8 +229,8 @@ Same as the Vercel guide (`specs/doppler-vercel.md` — branch protection, no `p
 
 - The reusable workflow owns deploy serialization: one job-level concurrency group per worker (repository, `project`, `working-directory`, and the pull request number or `production`). Production runs are not cancelled — a cancelled `wrangler deploy` has no defined outcome mid-upload, and GitHub supersedes the queued run anyway, so the newest commit still wins. Preview runs are, because the cancelling run redeploys. The group is per worker, not per repository, so a multi-project caller's jobs do not supersede each other while queued. Callers need no concurrency block.
 - Callers grant `contents: read`, `id-token: write` and `pull-requests: write`. Only the `comment` job uses the last one.
-- Pin bun and node in the reusable workflow (`1.4.4` and `22` today) and wrangler in each app repository's devDependencies plus lockfile; upgrade either through a reviewed change.
-- Review lockfile diffs: dependency code runs during the build, the `wrangler secret bulk` step and the wrangler-action bundle step. The last two hold the deploy token.
+- Pin bun, node and the deploy-side wrangler in the reusable workflow (`1.4.4`, `22` and `WRANGLER_VERSION` today); the app's own wrangler only bundles in the build job. Upgrade through a reviewed change.
+- Review lockfile diffs: dependency code runs in the build job, which reaches the app config but no deploy token.
 - A person who can land code on the default branch can deploy the worker. Default-branch protection is the production authorization boundary. A person who can push a branch and open a pull request can deploy a preview only in the isolated preview account.
 
 ## Cloudflare controls
