@@ -171,14 +171,16 @@ Do the same steps for the preview environment if needed.
 The workflow installs dependencies with bun (`--frozen-lockfile`, pinned in
 `.github/workflows/cloudflare-deploy.yml`), fetches the app's Doppler config
 from `<project>` (`prd` or `preview`), runs the app's build when it has
-one, fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as step
-outputs from the shared `webops-shared-prod` project, pushes the runtime
-secrets with `wrangler secret bulk`, and runs `wrangler deploy`. No
+one, and fetches `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` as step
+outputs. Production reads them from `<project>` /
+`cloudflare-deploy-configs`; previews read them from
+`webops-shared-prod` / `cloudflare-preview-deploy-configs`. It then pushes
+the runtime secrets with `wrangler secret bulk` and runs `wrangler deploy`. No
 `wranglerVersion` is passed, so wrangler-action uses the wrangler the app
 repository installed — pin wrangler in the app's devDependencies and
-lockfile. There is no per-app Doppler deploy config: the worker's identity
-is its name in the app repository's wrangler config, so `project` only
-names where the app's config lives.
+lockfile. `project` selects both the app configs and that Worker's isolated
+production deploy config; the actual production Worker name remains in the
+app repository's wrangler config.
 
 Callers must ship a bun lockfile and a wrangler devDependency. The lockfile
 is looked up in `working-directory` first, then at the repository root, and
@@ -239,16 +241,18 @@ Worker runtime secrets pass through the runner as well: before
 Doppler meta keys (`DOPPLER_PROJECT`, `DOPPLER_CONFIG`,
 `DOPPLER_ENVIRONMENT`), fails if no secret remains, and pipes the rest to
 `bun run wrangler secret bulk` — Doppler's DIY Workers flow, with the OIDC
-identity instead of a service token. On a first deploy wrangler creates a
-draft worker. The sync is additive: a key removed from Doppler stays on the
+identity instead of a service token. On a first preview deploy wrangler creates a
+draft worker; production Workers must be bootstrapped before creating their
+scoped tokens. The sync is additive: a key removed from Doppler stays on the
 worker until deleted by hand. See `specs/doppler-cloudflare.md` for the full
 risk discussion.
 
 A worker with no runtime secrets — every binding declared in its wrangler
-config — sets `sync-secrets: false` and omits `project`. Both the config
-fetch and the push step are skipped, so no application secret reaches the
-runner, and the deploy identity needs read on `cloudflare-deploy-configs`
-only (see `examples/uptime-kuma-status/deploy.yml`). A static site sets
+config — sets `sync-secrets: false`. The app-config fetch and the push step
+are skipped, so no application secret reaches the runner. `project` remains
+required because `<project>` / `cloudflare-deploy-configs` contains the API
+token restricted to that production Worker (see
+`examples/uptime-kuma-status/deploy.yml`). A static site sets
 `sync-secrets: false`, keeps `project` and has a build: the config
 is fetched for the build and nothing is pushed (see
 `examples/cloudflare-site/deploy.yml`). With `sync-secrets` left at its
@@ -312,7 +316,7 @@ no identity would match.
 
 | Name          | Required | Default | Description                                                          |
 | ------------- | -------- | ------- | -------------------------------------------------------------------- |
-| `project`     | when `sync-secrets` is true, and for every pull request | — | Doppler project holding the app's config in `prd` and `preview`. Also names the preview worker `<project>-pr-<number>`. |
+| `project`     | yes      | —       | Doppler project holding the Worker-scoped production deploy config and the app's `prd` / `preview` configs. Also names the preview worker `<project>-pr-<number>`. |
 | `sync-secrets` | no      | `true`  | Whether the worker has runtime secrets to push. `false` skips the push step; without a build it also skips the config fetch. |
 | `build-command` | no     | —       | Fallback build command (e.g. `bun run build`) for an app whose `package.json` has no `build:cloudflare` script; ignored when the script exists. Runs in `working-directory` with the Doppler config as its environment. |
 | `working-directory` | no | `.`     | Directory holding the wrangler config, relative to the repository root. |
@@ -326,35 +330,42 @@ no identity would match.
 
 ### Doppler setup
 
-1. In `webops-shared-prod`, create the `cloudflare-deploy-configs` config
-   with `CLOUDFLARE_API_TOKEN` (visibility Masked; an account-owned token
-   with Workers-product `Editor`, plus route write only for required zones)
-   and `CLOUDFLARE_ACCOUNT_ID` of the production account. Bootstrap a new
-   production Worker separately with `Admin`, then return to `Editor`.
-   Create `cloudflare-preview-deploy-configs` with the same two keys for a
-   separate preview account; its token needs Workers-product `Admin` because
-   the workflow creates and deletes dynamically named PR Workers. Give that
-   token no zone access. Keep ONLY those two values in each Doppler config.
-2. Keep each app's config in `<project>` / `prd` and `<project>` / `preview`
+1. Bootstrap the production Worker and its routes or custom domains with a
+   separately controlled administrator credential. Then create an
+   account-owned token with **Individual Workers Editor**, scoped to that
+   existing Worker only. It must have no zone, route, or account-wide Worker
+   permission. In `<project>` / `cloudflare-deploy-configs`, store that token
+   as `CLOUDFLARE_API_TOKEN` (Masked), the production account as
+   `CLOUDFLARE_ACCOUNT_ID`, and its revocation ID as
+   `CLOUDFLARE_API_TOKEN_ID`. The steady-state workflow can update code and
+   secrets but cannot create/delete Workers or change a route/custom-domain
+   connection.
+2. In `webops-shared-prod` / `cloudflare-preview-deploy-configs`, store the
+   same three keys for a separate preview account. This token needs
+   Workers-product `Admin` because the workflow creates and deletes future,
+   dynamically named PR Workers. Give it no zone permissions, and never put
+   a production Worker, zone, or binding resource in that account.
+3. Keep each app's config in `<project>` / `prd` and `<project>` / `preview`
    (visibility Masked). With `sync-secrets` every value there is pushed to
    the worker; with a build every value is the build's environment.
    A worker with no runtime secrets and no build skips this step: its caller
-   sets `sync-secrets: false`. Do not create an empty `prd` config for it.
-3. Create two Cloudflare-specific service accounts per repository; Doppler
+   sets `sync-secrets: false`. It still has a project and production deploy
+   config. Do not create an empty `prd` config for it.
+4. Create two Cloudflare-specific service accounts per repository; Doppler
    grants access per service account, so two identities on one account are
    not isolated.
    - Production: subject `repo:<org>/<repo>:ref:refs/heads/<default>`, with
-     read access only to `webops-shared-prod` /
-     `cloudflare-deploy-configs` and `<project>` / `prd`.
+     read access only to `<project>` / `cloudflare-deploy-configs` and, when
+     the app uses it, `<project>` / `prd`.
    - Preview: subject `repo:<org>/<repo>:pull_request`, with read access only
      to `webops-shared-prod` / `cloudflare-preview-deploy-configs` and
      `<project>` / `preview`.
 
    Bind both identities to this workflow's approved SHA with
    `job_workflow_ref`; see `specs/doppler-cloudflare.md` for every claim.
-4. Pass the event-appropriate identity ID as `identity-id` and the Doppler
-   project as `project` in the caller, or `sync-secrets: false` and no
-   `project` for a production-only worker with no runtime secrets.
+5. Pass the event-appropriate identity ID as `identity-id` and always pass
+   the Doppler project as `project`. Use `sync-secrets: false` for a Worker
+   with no runtime secrets.
 
 ## Render deploy
 

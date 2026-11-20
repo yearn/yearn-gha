@@ -5,22 +5,19 @@ on:
     inputs:
       project:
         description: >-
-          Doppler project holding the worker's config: prd for a push to the
-          default branch, preview for a pull request. Its values are pushed to
-          Cloudflare with wrangler secret bulk before the deploy and, when the
-          app has a build, exported as the build environment. Required when
-          sync-secrets is true, and for every pull request, where it also
-          names the preview worker (<project>-pr-<number>).
-        required: false
-        default: ""
+          Doppler project for this worker. Its cloudflare-deploy-configs
+          config holds the production token scoped to this Worker only; prd
+          and preview hold the matching app config. It also names preview
+          workers (<project>-pr-<number>).
+        required: true
         type: string
       sync-secrets:
         description: >-
           Whether the worker has runtime secrets to push from the Doppler
           config. Set false for a worker whose every binding is declared in
           its wrangler config, or for a static site; nothing is then pushed to
-          Cloudflare, and without a build the config is never fetched,
-          so no application secret reaches the runner at all.
+          Cloudflare, and without a build the app config is never fetched.
+          The event-specific deploy credential is still fetched.
         required: false
         default: true
         type: boolean
@@ -54,19 +51,19 @@ on:
         value: ${{ jobs.deploy.outputs.deployment-url }}
 
 env:
-  # Shared Doppler project holding CLOUDFLARE_API_TOKEN and
-  # CLOUDFLARE_ACCOUNT_ID, used by every worker deploy. The configs are
-  # separate from the Vercel deploy-configs so neither platform's deploy
-  # exports the other's credentials onto its runner.
+  # Only previews use a shared deploy credential. It is Workers-product Admin
+  # in a separate account containing no production resources, because dynamic
+  # <project>-pr-<number> workers cannot be scoped before they exist.
+  # Production credentials live in <project>/cloudflare-deploy-configs and
+  # carry Individual Workers Editor for that one existing worker.
   SHARED_PROJECT: webops-shared-prod
   # Pull requests deploy previews; any other trigger (push to the default
   # branch) deploys production.
   DEPLOY_ENV: ${{ github.event_name == 'pull_request' && 'preview' || 'production' }}
   # Pull request code runs on the runner and can mint its OIDC token. Select a
   # token for a separate preview-only Cloudflare account so a compromised PR
-  # cannot read or modify production workers, routes, or secrets. The preview
-  # and production identities must also belong to separate Doppler service
-  # accounts, each granted only its matching deploy and app config.
+  # cannot read or modify production workers, routes, or secrets. Production
+  # selects a per-worker config instead of the shared preview config.
   DEPLOY_CONFIG: ${{ github.event_name == 'pull_request' && 'cloudflare-preview-deploy-configs' || 'cloudflare-deploy-configs' }}
   # The preview service account may read only preview; production may read
   # only prd. Keeping both configs in one app project is safe only with those
@@ -115,16 +112,6 @@ jobs:
         run: |
           printf '::error::production deploys are only allowed for a push to the default branch (%s); got %s on %s\n' \
             "$DEFAULT_BRANCH" "$EVENT_NAME" "$REF" >&2
-          exit 1
-
-      # `project` is only meaningful when there are secrets to fetch, so it is
-      # not a required input — but a caller that syncs secrets and forgets it
-      # would otherwise fetch project "" and fail later, inside the step that
-      # holds the deploy token. Fail here instead, before any credential.
-      - name: Validate inputs
-        if: inputs.sync-secrets && inputs.project == ''
-        run: |
-          echo "::error::project is required when sync-secrets is true; pass the Doppler project holding the worker's runtime secrets, or set sync-secrets: false for a worker with none" >&2
           exit 1
 
       # The caller workflow of a pull request comes from the pull request, so
@@ -231,7 +218,7 @@ jobs:
       # so no application secret is fetched at all.
       - name: Load app config from Doppler
         id: app-config
-        if: inputs.project != '' && (inputs.sync-secrets || steps.build-script.outputs.found == 'true' || inputs.build-command != '')
+        if: inputs.sync-secrets || steps.build-script.outputs.found == 'true' || inputs.build-command != ''
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
         with:
           auth-method: oidc
@@ -267,21 +254,18 @@ jobs:
           eval "$exports"
           bash -euo pipefail -c "$command"
 
-      # Deploy credentials live alone in their config: a broader config would
-      # pull other secrets onto the runner. The values are read as step
-      # outputs, never injected into the job environment; only the validate
-      # step and the secrets push step (explicit env mapping) and the
-      # wrangler-action inputs receive them. With no wranglerVersion input,
-      # wrangler-action uses the wrangler the app repository already
-      # installed; the preceding probe is what guarantees no install runs in
-      # the steps that hold the token.
-      - name: Load shared Cloudflare token and account ID from Doppler
+      # Preview credentials come from the shared preview-only account config.
+      # Production credentials come from this worker's project and are scoped
+      # by Cloudflare to this one existing Worker. Both configs contain deploy
+      # credentials only. Values remain step outputs; only the validation,
+      # secret push and wrangler-action steps receive them.
+      - name: Load Cloudflare token and account ID from Doppler
         id: doppler
         uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
         with:
           auth-method: oidc
           doppler-identity-id: ${{ inputs.identity-id }}
-          doppler-project: ${{ env.SHARED_PROJECT }}
+          doppler-project: ${{ env.DEPLOY_ENV == 'preview' && env.SHARED_PROJECT || inputs.project }}
           doppler-config: ${{ env.DEPLOY_CONFIG }}
           inject-env-vars: false
 
