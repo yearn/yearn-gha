@@ -37,4 +37,4 @@ jobs:
       project: ${{ matrix.project }}
       working-directory: ${{ matrix.dir }}
       build-command: bun run build
-      identity-id: ${{ github.event_name == 'pull_request' && vars.DOPPLER_PREVIEW_IDENTITY_ID || vars.DOPPLER_PRODUCTION_IDENTITY_ID }}
+      identity-id: ${{ github.event_name == 'pull_request' && vars.DOPPLER_CF_PREVIEW_IDENTITY_ID || vars.DOPPLER_CF_PRODUCTION_IDENTITY_ID }}

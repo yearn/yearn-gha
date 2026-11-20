@@ -18,7 +18,7 @@ jobs:
     uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # pin to the approved full commit SHA
     with:
       project: rpc-read-proxy
-      identity-id: ${{ vars.DOPPLER_PRODUCTION_IDENTITY_ID }}
+      identity-id: ${{ vars.DOPPLER_CF_PRODUCTION_IDENTITY_ID }}
 
   # Post-deploy verification stays with the caller: the reusable workflow is
   # deploy-only. A dead upstream fails the run here instead of surfacing as
