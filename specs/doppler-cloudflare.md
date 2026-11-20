@@ -63,7 +63,7 @@ nothing is pushed to Cloudflare.
 Behaviour to know:
 
 - **Zero secrets is an error, not a no-op.** With `sync-secrets` left at `true`, a config that resolves empty fails the deploy. That catches a wrong `project` or an unpopulated config, rather than shipping a worker whose secrets never arrived.
-- **First deploy.** If the worker does not exist yet, `wrangler secret bulk` creates a draft worker in non-interactive mode. `wrangler deploy` then uploads the code. Every new pull request preview starts this way.
+- **First deploy.** If the worker does not exist yet, `wrangler secret bulk` creates a draft worker in non-interactive mode. `wrangler deploy` then uploads the code. Every new pull request preview starts this way. With `sync-secrets: false` there is no draft, so `wrangler deploy` creates the worker; wrangler 4.161 then reads it back from `/workers/workers/<name>`, which answers 10007 "does not exist" for a few seconds, and does not retry a 404. The workflow runs the deploy a second time when the first fails.
 - **Existing secrets.** `wrangler deploy` keeps the secrets already on the worker.
 - **Additive.** `secret bulk` adds and updates keys. It does not delete a key removed from Doppler. Remove stale keys by hand with `wrangler secret delete`.
 - **Everything in the config is pushed.** With both a build and `sync-secrets`, build-only values (`NEXT_PUBLIC_*`) are also stored as worker secrets. They are public by nature; the cost is noise in `wrangler secret list`.
