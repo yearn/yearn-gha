@@ -83,7 +83,7 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+      deployment-url: ${{ steps.deploy.outputs.deployment-url || steps.deploy-retry.outputs.deployment-url }}
     steps:
       # Fork PRs never receive an OIDC token; fail explicitly instead of
       # letting the Doppler login error obscure the cause.
@@ -318,6 +318,22 @@ jobs:
       # config's `preview` environment under the per-pull-request name.
       - name: Deploy to Cloudflare Workers
         id: deploy
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ steps.doppler.outputs.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: ${{ inputs.working-directory }}
+          packageManager: bun
+          command: ${{ env.DEPLOY_ENV == 'preview' && format('deploy --env preview --name {0}', env.PREVIEW_NAME) || 'deploy' }}
+
+      # On the first deploy of a new worker name, wrangler uploads the script
+      # and then reads it back from /workers/workers/<name>, which can still
+      # answer 10007 "does not exist"; wrangler does not retry a 404. The
+      # worker exists by then, so a second deploy succeeds.
+      - name: Retry deploy to Cloudflare Workers
+        id: deploy-retry
+        if: steps.deploy.outcome == 'failure'
         uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
         with:
           apiToken: ${{ steps.doppler.outputs.CLOUDFLARE_API_TOKEN }}
