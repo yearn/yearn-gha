@@ -5,7 +5,8 @@
 # `wrangler secret bulk` push, and `project` is omitted.
 #
 # The deploy identity for this repository needs read on
-# webops-shared-prod / cloudflare-deploy-configs only.
+# webops-shared-prod / cloudflare-deploy-configs only. Keep this production
+# identity on its own Cloudflare-specific Doppler service account.
 
 name: Deploy to Cloudflare Workers
 
@@ -27,4 +28,4 @@ jobs:
     uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # pin to the approved full commit SHA
     with:
       sync-secrets: false
-      identity-id: ${{ vars.DOPPLER_PRODUCTION_IDENTITY_ID }}
+      identity-id: ${{ vars.DOPPLER_CF_PRODUCTION_IDENTITY_ID }}

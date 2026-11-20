@@ -201,13 +201,13 @@ authentication.
 
 A preview is its own worker, `<project>-pr-<number>`, deployed with
 `wrangler deploy --env preview --name <project>-pr-<number>` and redeployed
-on every push to the pull request. Previews use the same Cloudflare account
-and token as production (`cloudflare-deploy-configs`), the way
-`vercel-deploy.yml` shares `deploy-configs`: pull request code runs on the
-runner and can read that token. A `comment` job posts
-the preview URL on the pull request, and closing the pull request deletes
-the worker. The app's wrangler config must define a `preview` environment
-that is safe outside production:
+on every push to the pull request. Previews go to a separate Cloudflare
+account with their own token (`cloudflare-preview-deploy-configs`): pull
+request code runs on the runner, so the credentials a pull request can reach
+must not be able to touch production workers, zones, or secrets. A `comment`
+job posts the preview URL on the pull request, and closing the pull request
+deletes the worker. The app's wrangler config must define a `preview`
+environment that is safe outside production:
 
 ```jsonc
 {
@@ -222,11 +222,9 @@ that is safe outside production:
 }
 ```
 
-Bindings in the `preview` environment must point at preview resources, not
-production ones. wrangler only warns when the environment is missing and
-deploys the top-level config instead — production routes and cron triggers
-included, in the account that serves production. The workflow does not
-check for it.
+Bindings in the `preview` environment must point at resources in the preview
+account. wrangler only warns when the environment is missing and deploys the
+top-level config instead, so the workflow cannot catch a config without one.
 
 Unlike Vercel there is no remote build: the app is built and bundled on the
 runner. The build is the `build:cloudflare` script in the app's
@@ -257,7 +255,7 @@ is fetched for the build and nothing is pushed (see
 `true` default, a config that resolves empty still fails the deploy — that
 check is what catches a wrong `project`.
 
-The Cloudflare config is deliberately separate from the Vercel
+The Cloudflare configs are deliberately separate from the Vercel
 `deploy-configs` so neither platform's deploy exports the other's
 credentials onto its runner.
 
@@ -284,11 +282,11 @@ jobs:
     uses: yearn/yearn-gha/.github/workflows/cloudflare-deploy.yml@<approved-sha> # pin to the approved full commit SHA
     with:
       project: my-worker
-      identity-id: ${{ github.event_name == 'pull_request' && vars.DOPPLER_PREVIEW_IDENTITY_ID || vars.DOPPLER_PRODUCTION_IDENTITY_ID }}
+      identity-id: ${{ github.event_name == 'pull_request' && vars.DOPPLER_CF_PREVIEW_IDENTITY_ID || vars.DOPPLER_CF_PRODUCTION_IDENTITY_ID }}
 ```
 
 The `closed` type is what deletes the preview worker; without it previews
-accumulate in the account. A production-only caller drops the
+accumulate in the preview account. A production-only caller drops the
 `pull_request` trigger and passes its production identity. A monorepo runs
 one job per app with a matrix over `project` and `working-directory` (see
 `examples/cloudflare-monorepo/deploy.yml`).
@@ -303,10 +301,10 @@ Callers grant `contents: read`, `id-token: write` and `pull-requests: write`
 (the preview URL comment). A production-only caller grants
 `pull-requests: write` too: reusable workflows cannot elevate beyond the
 caller's token permissions, and the `comment` job requests it. Configure
-`DOPPLER_PREVIEW_IDENTITY_ID` and `DOPPLER_PRODUCTION_IDENTITY_ID` as
-Actions repository variables in each caller. They are the variables
-`vercel-deploy.yml` callers already have: a repository moving from Vercel
-reuses its identities and calls both workflows side by side. Do
+`DOPPLER_CF_PREVIEW_IDENTITY_ID` and `DOPPLER_CF_PRODUCTION_IDENTITY_ID` as
+Actions repository variables in each caller. These must be identities on
+separate, Cloudflare-specific Doppler service accounts; do not reuse the
+service account used by `vercel-deploy.yml`. Do
 not set `environment:` on the caller job: it changes the OIDC subject, and
 no identity would match.
 
@@ -318,7 +316,7 @@ no identity would match.
 | `sync-secrets` | no      | `true`  | Whether the worker has runtime secrets to push. `false` skips the push step; without a build it also skips the config fetch. |
 | `build-command` | no     | —       | Fallback build command (e.g. `bun run build`) for an app whose `package.json` has no `build:cloudflare` script; ignored when the script exists. Runs in `working-directory` with the Doppler config as its environment. |
 | `working-directory` | no | `.`     | Directory holding the wrangler config, relative to the repository root. |
-| `identity-id` | yes      | —       | Doppler service-account identity for the event: preview for a pull request, production for a push to the default branch. |
+| `identity-id` | yes      | —       | Doppler identity for the event. Preview and production identities must belong to separate service accounts with access only to their matching configs. |
 
 ### Outputs
 
@@ -329,25 +327,31 @@ no identity would match.
 ### Doppler setup
 
 1. In `webops-shared-prod`, create the `cloudflare-deploy-configs` config
-   with `CLOUDFLARE_API_TOKEN` (visibility Masked; Cloudflare permissions:
-   Workers Scripts Edit, plus Workers Routes Edit when workers declare
-   routes) and `CLOUDFLARE_ACCOUNT_ID`. Previews and production both read
-   it. Keep ONLY those two values in it — every value in
-   the config is fetched onto the runner as a step output.
+   with `CLOUDFLARE_API_TOKEN` (visibility Masked; an account-owned token
+   with Workers-product `Editor`, plus route write only for required zones)
+   and `CLOUDFLARE_ACCOUNT_ID` of the production account. Bootstrap a new
+   production Worker separately with `Admin`, then return to `Editor`.
+   Create `cloudflare-preview-deploy-configs` with the same two keys for a
+   separate preview account; its token needs Workers-product `Admin` because
+   the workflow creates and deletes dynamically named PR Workers. Give that
+   token no zone access. Keep ONLY those two values in each Doppler config.
 2. Keep each app's config in `<project>` / `prd` and `<project>` / `preview`
    (visibility Masked). With `sync-secrets` every value there is pushed to
    the worker; with a build every value is the build's environment.
    A worker with no runtime secrets and no build skips this step: its caller
    sets `sync-secrets: false`. Do not create an empty `prd` config for it.
-3. Use one service account per repository with two identities — the
-   account `vercel-deploy.yml` uses, if the repository has one. Grant it
-   read access to `webops-shared-prod` / `cloudflare-deploy-configs`,
-   `<project>` / `prd` and `<project>` / `preview`. Doppler grants access
-   per service account, so the pull request identity can read all three.
-   - Production: subject `repo:<org>/<repo>:ref:refs/heads/<default>`.
-   - Preview: subject `repo:<org>/<repo>:pull_request`.
+3. Create two Cloudflare-specific service accounts per repository; Doppler
+   grants access per service account, so two identities on one account are
+   not isolated.
+   - Production: subject `repo:<org>/<repo>:ref:refs/heads/<default>`, with
+     read access only to `webops-shared-prod` /
+     `cloudflare-deploy-configs` and `<project>` / `prd`.
+   - Preview: subject `repo:<org>/<repo>:pull_request`, with read access only
+     to `webops-shared-prod` / `cloudflare-preview-deploy-configs` and
+     `<project>` / `preview`.
 
-   See `specs/doppler-cloudflare.md` for the additional claims.
+   Bind both identities to this workflow's approved SHA with
+   `job_workflow_ref`; see `specs/doppler-cloudflare.md` for every claim.
 4. Pass the event-appropriate identity ID as `identity-id` and the Doppler
    project as `project` in the caller, or `sync-secrets: false` and no
    `project` for a production-only worker with no runtime secrets.
