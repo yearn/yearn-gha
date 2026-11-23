@@ -309,6 +309,13 @@ jobs:
           # bwrap fails with "setting up uid map: Permission denied" and every
           # Bash command dies inside the sandbox.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # ubuntu-26.04 also loads bwrap-userns-restrict, which drops every
+          # capability inside bwrap's namespace. apply-seccomp then cannot write
+          # /proc/self/setgroups for its nested namespace and Bash dies again.
+          if [ -f /etc/apparmor.d/bwrap-userns-restrict ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict
+          fi
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-user -- unshare -Ur true
           command -v socat
 
       - name: Run Claude code review
